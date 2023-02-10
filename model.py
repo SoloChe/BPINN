@@ -105,10 +105,9 @@ class BBP_Model(nn.Module):
             
         # last layer
         if local:
-            b_layer = BayesLinear_Normalq_local(layers[n_layer - 2], layers[n_layer - 1], gaussian(0, 1))
+            self.last_layer = BayesLinear_Normalq_local(layers[n_layer - 2], layers[n_layer - 1], gaussian(0, 1))
         else:
-            b_layer = BayesLinear_Normalq(layers[n_layer - 2], layers[n_layer - 1], gaussian(0, 1))
-        self.layer_list.append(b_layer)
+            self.last_layer = BayesLinear_Normalq(layers[n_layer - 2], layers[n_layer - 1], gaussian(0, 1))
         self.layer_list_torch = nn.ModuleList(self.layer_list)
      
     def forward(self, x):
@@ -117,6 +116,9 @@ class BBP_Model(nn.Module):
             x, KL_loss = layer(x)
             x = self.activation(x)
             KL_loss_total += KL_loss
+
+        x, KL_loss = self.last_layer(x)
+        KL_loss_total += KL_loss
         return x, KL_loss_total
 
 class BBP_Model_PINN:

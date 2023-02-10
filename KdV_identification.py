@@ -58,8 +58,11 @@ class BBP_Model_PINN_Burgers(BBP_Model_PINN):
         u_xx = torch.autograd.grad(u_x, x, torch.ones_like(u_x),
                                     retain_graph=True,
                                     create_graph=True)[0]
+        u_xxx = torch.autograd.grad(u_xx, x, torch.ones_like(u_xx),
+                                    retain_graph=True,
+                                    create_graph=True)[0]
 
-        F = u_t + lambda_1*u*u_x - lambda_2*u_xx
+        F = u_t + lambda_1*u*u_x + lambda_2*u_xxx
         return F
 
     def fit(self, X, t, U, n_samples):
@@ -112,27 +115,32 @@ class BBP_Model_PINN_Burgers(BBP_Model_PINN):
 
 if __name__ == '__main__':
 
-    data = scipy.io.loadmat('./Data/burgers_shock.mat')
+    data = scipy.io.loadmat('./Data/KdV.mat')
 
-    t = data['t'].flatten()[:,None] # 100 x 1
-    x = data['x'].flatten()[:,None] # 256 x 1
-    Exact_ = np.real(data['usol']).T # 100 x 256
+    t = data['tt'].flatten()[:,None] # 201 x 1
+    x = data['x'].flatten()[:,None] # 512 x 1 
+    Exact_ = np.real(data['uu']).T # 201 x 512
 
-    # add noise
-    Exact = Exact_ + np.random.normal(0, 0.1, (100, 256))
+    noise = 0
+    Exact = Exact_ + noise*np.std(Exact_)*np.random.randn(201, 512)
 
-    X, T = np.meshgrid(x,t) # 100 x 256
-    X_star = np.hstack((X.flatten()[:,None], T.flatten()[:,None])) # 25600 x 2
-    u_star = Exact.flatten()[:,None]  # 25600 x 1
+    X, T = np.meshgrid(x,t) # 201 x 512
+    X_star = np.hstack((X.flatten()[:,None], T.flatten()[:,None])) # 102912 x 2
+    u_star = Exact.flatten()[:,None]  # 102912 x 1
 
+    N_u_test = 20000
+    idx_test = np.random.choice(X_star.shape[0], N_u_test, replace = False)
+    X_test = X_star[idx_test,:]
+    u_test = u_star[idx_test,:]
     # Domain bounds of x, t
     xt_lb = X_star.min(0)
     xt_ub = X_star.max(0)
 
     # training data
-    N_u = 2000
-    idx = np.random.choice(X_star.shape[0], N_u, replace=False)
+    N_u = 3000
+    idx = np.random.choice(X_star.shape[0], N_u, replace = False)
     X_u_train = X_star[idx,:]
+
     u_train = u_star[idx,:]
 
     u_min = u_train.min(0)
@@ -160,7 +168,7 @@ if __name__ == '__main__':
                                         device)
     #%%
     
-    writer = SummaryWriter(comment = '_test3_with_burgers')
+    writer = SummaryWriter(comment = '_test3_with_KdV')
 
     fit_loss_U_train = np.zeros(num_epochs)
     fit_loss_F_train = np.zeros(num_epochs)
@@ -169,7 +177,7 @@ if __name__ == '__main__':
 
     for i in range(num_epochs):
 
-        EU, EF, KL_loss, total_loss = pinn_model.fit(X, t, U, n_samples = 20)
+        EU, EF, KL_loss, total_loss = pinn_model.fit(X, t, U, n_samples = 10)
         
         fit_loss_U_train[i] = EU.item()
         fit_loss_F_train[i] = EF.item()
@@ -204,11 +212,11 @@ if __name__ == '__main__':
             lambda2_mus = np.exp(pinn_model.lambda2_mus.item())
             lambda2_stds = torch.log(1 + torch.exp(pinn_model.lambda2_rhos)).item()
             
-            samples_star, _ = pinn_model.predict(X_star, 100, pinn_model.network)
+            samples_star, _ = pinn_model.predict(X_test, 50, pinn_model.network)
             u_pred_star = samples_star.mean(axis = 0)
-            error_star = np.linalg.norm(u_star-u_pred_star, 2)/np.linalg.norm(u_star, 2)
+            error_star = np.linalg.norm(u_test-u_pred_star, 2)/np.linalg.norm(u_test, 2)
 
-            samples_train, _ = pinn_model.predict(X_u_train, 100, pinn_model.network)
+            samples_train, _ = pinn_model.predict(X_u_train, 50, pinn_model.network)
             u_pred_train = samples_train.mean(axis=0)
             error_train = np.linalg.norm(u_train-u_pred_train, 2)/np.linalg.norm(u_train, 2)
 
@@ -227,9 +235,9 @@ if __name__ == '__main__':
     #%%
 
     x = data['x'].flatten()[:,None]
-    X_u_test_25 = np.hstack([x, 0.25*np.ones_like((x))]); u_test_25 = Exact[25]; u_mean_25 = Exact_[25]
-    X_u_test_50 = np.hstack([x, 0.50*np.ones_like((x))]); u_test_50 = Exact[50]; u_mean_50 = Exact_[50]
-    X_u_test_75 = np.hstack([x, 0.75*np.ones_like((x))]); u_test_75 = Exact[75]; u_mean_75 = Exact_[75]
+    X_u_test_25 = np.hstack([x, 0.25*np.ones_like((x))]); u_test_25 = Exact[50]; u_mean_25 = Exact_[50]
+    X_u_test_50 = np.hstack([x, 0.50*np.ones_like((x))]); u_test_50 = Exact[100]; u_mean_50 = Exact_[100]
+    X_u_test_75 = np.hstack([x, 0.75*np.ones_like((x))]); u_test_75 = Exact[150]; u_mean_75 = Exact_[150]
 
 
     def get_res(X):
