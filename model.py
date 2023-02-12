@@ -2,7 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from utils import log_gaussian_loss, gaussian, get_kl_Gaussian_divergence
+from utils import log_gaussian_loss, gaussian, get_kl_Gaussian_divergence, get_kl_divergence
+import priors
 
 class BayesLinear_Normalq(nn.Module):
     def __init__(self, input_dim, output_dim, prior):
@@ -33,9 +34,14 @@ class BayesLinear_Normalq(nn.Module):
             bias_sample = self.bias_mus + bias_epsilons * bias_stds
             output = torch.mm(x, weight_sample) + bias_sample
 
+            
             # computing the KL loss term
-            KL_loss_weight = get_kl_Gaussian_divergence(self.prior.mu, self.prior.sigma**2, self.weight_mus, weight_stds**2)
-            KL_loss_bias = get_kl_Gaussian_divergence(self.prior.mu, self.prior.sigma**2, self.bias_mus, bias_stds**2)
+            varpost_weight = gaussian(self.weight_mus, weight_stds)
+            varpost_bias = gaussian(self.bias_mus, bias_stds)
+            KL_loss_weight = get_kl_divergence(weight_sample, self.prior, varpost_weight)
+            KL_loss_bias = get_kl_divergence(bias_sample, self.prior, varpost_bias)
+            # KL_loss_weight = get_kl_Gaussian_divergence(self.prior.mu, self.prior.sigma**2, self.weight_mus, weight_stds**2)
+            # KL_loss_bias = get_kl_Gaussian_divergence(self.prior.mu, self.prior.sigma**2, self.bias_mus, bias_stds**2)
             KL_loss = KL_loss_weight + KL_loss_bias
 
             return output, KL_loss
@@ -79,6 +85,7 @@ class BayesLinear_Normalq_local(nn.Module):
 
             output = act_W_out + act_b_out
 
+            ## todo
             KL_loss_weight = get_kl_Gaussian_divergence(self.prior.mu, self.prior.sigma**2, self.W_mu, std_w**2)
             KL_loss_bias = get_kl_Gaussian_divergence(self.prior.mu, self.prior.sigma**2, self.b_mu, std_b**2)
             KL_loss = KL_loss_weight + KL_loss_bias
@@ -88,19 +95,20 @@ class BayesLinear_Normalq_local(nn.Module):
             return output
 
 class BBP_Model(nn.Module):
-    def __init__(self, layers, local = False):
+    def __init__(self, layers, prior, local = False):
         super(BBP_Model, self).__init__()
 
         n_layer = len(layers)
         self.output_dim = layers[-1] - 1
         self.layer_list = []
+        
 
         self.activation = nn.Tanh()
         for i in range(n_layer - 2):
             if local:
-                b_layer = BayesLinear_Normalq_local(layers[i], layers[i+1], gaussian(0, 1))
+                b_layer = BayesLinear_Normalq_local(layers[i], layers[i+1], prior)
             else:
-                b_layer = BayesLinear_Normalq(layers[i], layers[i+1], gaussian(0, 1))
+                b_layer = BayesLinear_Normalq(layers[i], layers[i+1], prior)
             self.layer_list.append(b_layer)
             
         # last layer
@@ -108,6 +116,7 @@ class BBP_Model(nn.Module):
             self.last_layer = BayesLinear_Normalq_local(layers[n_layer - 2], layers[n_layer - 1], gaussian(0, 1))
         else:
             self.last_layer = BayesLinear_Normalq(layers[n_layer - 2], layers[n_layer - 1], gaussian(0, 1))
+
         self.layer_list_torch = nn.ModuleList(self.layer_list)
      
     def forward(self, x):
@@ -125,7 +134,7 @@ class BBP_Model_PINN:
     def __init__(self, xt_lb, xt_ub, u_lb, u_ub,
                  layers, loss_func, opt, local,
                  learn_rate, batch_size, n_batches,
-                 device):
+                 prior, device):
 
         self.device = device
         self.xt_lb = torch.from_numpy(xt_lb).float().to(self.device)
@@ -138,7 +147,9 @@ class BBP_Model_PINN:
         self.batch_size = batch_size
         self.n_batches = n_batches
 
-        self.network = BBP_Model(layers, local)
+        self.prior = prior
+
+        self.network = BBP_Model(layers, self.prior, local)
         self.loss_func = loss_func
         
         # self.optimizer = torch.optim.SGD(self.network.parameters(), lr = self.learn_rate)

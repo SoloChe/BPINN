@@ -17,7 +17,7 @@ print('device: {}'.format(device))
 
 from model import BBP_Model_PINN
 
-class BBP_Model_PINN_Burgers(BBP_Model_PINN):
+class BBP_Model_PINN_KdV(BBP_Model_PINN):
     def __init__(self, xt_lb, xt_ub, u_lb, u_ub, 
                     layers, loss_func, opt, local, 
                     learn_rate, batch_size, n_batches, device):
@@ -43,7 +43,7 @@ class BBP_Model_PINN_Burgers(BBP_Model_PINN):
   
 
     def net_F(self, x, t, lambda1_sample, lambda2_sample):
-        lambda_1 = lambda1_sample        
+        lambda_1 = torch.exp(lambda1_sample)        
         lambda_2 = torch.exp(lambda2_sample)
 
         u, _, _ = self.net_U(x, t)
@@ -162,7 +162,7 @@ if __name__ == '__main__':
     n_batches = 1
     batch_size = len(X_u_train)
 
-    pinn_model = BBP_Model_PINN_Burgers(xt_lb, xt_ub, u_min, u_max,
+    pinn_model = BBP_Model_PINN_KdV(xt_lb, xt_ub, u_min, u_max,
                                         layers, loss_func, opt, local,
                                         learn_rate, batch_size, n_batches,
                                         device)
@@ -206,7 +206,7 @@ if __name__ == '__main__':
                 loss[i], fit_loss_U_train[i], fit_loss_F_train[i], KL_loss_train[i]))
 
         
-            lambda1_mus = pinn_model.lambda1_mus.item()
+            lambda1_mus = np.exp(pinn_model.lambda1_mus.item())
             lambda1_stds = torch.log(1 + torch.exp(pinn_model.lambda1_rhos)).item()
             
             lambda2_mus = np.exp(pinn_model.lambda2_mus.item())
