@@ -4,8 +4,8 @@ import numpy as np
 def log_gaussian_loss(output, target, sigma, no_dim): # negative
 
     exponent = -0.5*(target - output)**2/sigma**2
-    log_coeff = -no_dim*torch.log(sigma) - 0.5*no_dim*np.log(2*np.pi)
-    
+    # log_coeff = -no_dim*torch.log(sigma) - 0.5*no_dim*np.log(2*np.pi)
+    log_coeff = -no_dim*torch.log(sigma)
     return -(log_coeff + exponent).sum()
 
 # def log_gaussian_loss(output, target, sigma, no_dim, sum_reduce=True):
@@ -24,7 +24,6 @@ def get_kl_divergence(weights, prior, varpost):
     varpost_loglike = varpost.loglike(weights)
 
     # varpost_lik = varpost_loglik.exp()
-
     return (varpost_loglike - prior_loglike).sum() # weight is sampled directly from q(w|theta)
     # return (varpost_lik*(varpost_loglik - prior_loglik)).sum() # weight is sampled from the range of possible w
 
@@ -42,7 +41,7 @@ class gaussian:
 
     def loglike(self, weights):
         exponent = -0.5*(weights - self.mu)**2/self.sigma**2
-        log_coeff = -0.5*(np.log(2*np.pi) + 2*np.log(self.sigma))
+        log_coeff = -0.5*(np.log(2*np.pi) + 2*torch.log(self.sigma))
         return (exponent + log_coeff).sum()
 
 

@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim import Optimizer
 
-from priors import gaussian, spike_slab_2GMM
+from priors import spike_slab_2GMM
 
 
 import scipy.io
@@ -21,13 +21,15 @@ from model import BBP_Model_PINN
 class BBP_Model_PINN_AC(BBP_Model_PINN):
     def __init__(self, xt_lb, xt_ub, u_lb, u_ub, 
                     layers, loss_func, opt, local, 
-                    learn_rate, batch_size, n_batches, prior, device):
+                    learn_rate, batch_size, n_batches, 
+                    prior, numerical, identification, device):
         super().__init__(xt_lb, xt_ub, u_lb, u_ub, 
                             layers, loss_func, opt, local, 
-                            learn_rate, batch_size, n_batches, prior, device)
+                            learn_rate, batch_size, n_batches, 
+                            prior, numerical, identification, device)
 
     def initial_para(self):
-       
+        
         self.lambda1_mus = nn.Parameter(torch.Tensor(1).uniform_(0, 2))
         self.lambda1_rhos = nn.Parameter(torch.Tensor(1).uniform_(-3, 2))
         self.lambda2_mus = nn.Parameter(torch.Tensor(1).uniform_(0, 0.05))
@@ -88,7 +90,7 @@ class BBP_Model_PINN_AC(BBP_Model_PINN):
 
         return F
 
-    def fit(self, X, t, U, n_samples, identification = False):
+    def fit(self, X, t, U, n_samples):
         self.network.train()
 
         # X = torch.tensor(self.X, requires_grad=True).float().to(device)
@@ -103,9 +105,10 @@ class BBP_Model_PINN_AC(BBP_Model_PINN):
         fit_loss_F_total = 0
         fit_loss_U_total = 0
         KL_loss_total = 0
+
         for _ in range(n_samples):
             
-            if identification:
+            if self.identification:
                 lambda1_epsilons = self.lambda1_mus.data.new(self.lambda1_mus.size()).normal_()
                 lambda1_stds = torch.log(1 + torch.exp(self.lambda1_rhos))
                 lambda2_epsilons = self.lambda2_mus.data.new(self.lambda2_mus.size()).normal_()
@@ -117,21 +120,22 @@ class BBP_Model_PINN_AC(BBP_Model_PINN):
                 lambda2_sample = self.lambda2_mus + lambda2_epsilons * lambda2_stds
                 lambda3_sample = self.lambda3_mus + lambda3_epsilons * lambda3_stds
 
-                varpost_lambda1 = gaussian(self.lambda1_mus, lambda1_stds)
-                varpost_lambda2 = gaussian(self.lambda2_mus, lambda2_stds)
-                varpost_lambda3 = gaussian(self.lambda3_mus, lambda3_stds)
+                if self.numerical:
+                    varpost_lambda1 = gaussian(self.lambda1_mus, lambda1_stds)
+                    varpost_lambda2 = gaussian(self.lambda2_mus, lambda2_stds)
+                    varpost_lambda3 = gaussian(self.lambda3_mus, lambda3_stds)
 
-                KL_loss_lambda1 = get_kl_divergence(lambda1_sample, self.prior, varpost_lambda1)
-                KL_loss_lambda2 = get_kl_divergence(lambda2_sample, self.prior, varpost_lambda2)
-                KL_loss_lambda3 = get_kl_divergence(lambda3_sample, self.prior, varpost_lambda3)
+                    KL_loss_lambda1 = get_kl_divergence(lambda1_sample, self.prior, varpost_lambda1)
+                    KL_loss_lambda2 = get_kl_divergence(lambda2_sample, self.prior, varpost_lambda2)
+                    KL_loss_lambda3 = get_kl_divergence(lambda3_sample, self.prior, varpost_lambda3)
+                else:
 
-                # KL_loss_lambda1 = get_kl_Gaussian_divergence(self.prior_lambda1.mu, self.prior_lambda1.sigma**2, self.lambda1_mus, lambda1_stds**2)
-                # KL_loss_lambda2 = get_kl_Gaussian_divergence(self.prior_lambda2.mu, self.prior_lambda2.sigma**2, self.lambda2_mus, lambda2_stds**2)
-                # KL_loss_lambda3 = get_kl_Gaussian_divergence(self.prior_lambda3.mu, self.prior_lambda3.sigma**2, self.lambda3_mus, lambda3_stds**2)
+                    KL_loss_lambda1 = get_kl_Gaussian_divergence(self.prior_lambda1.mu, self.prior_lambda1.sigma**2, self.lambda1_mus, lambda1_stds**2)
+                    KL_loss_lambda2 = get_kl_Gaussian_divergence(self.prior_lambda2.mu, self.prior_lambda2.sigma**2, self.lambda2_mus, lambda2_stds**2)
+                    KL_loss_lambda3 = get_kl_Gaussian_divergence(self.prior_lambda3.mu, self.prior_lambda3.sigma**2, self.lambda3_mus, lambda3_stds**2)
                 
                 u_pred, log_noise_u, KL_loss_para = self.net_U(X, t)
                 KL_loss_total += (KL_loss_para + KL_loss_lambda1 + KL_loss_lambda2 + KL_loss_lambda3)
-
                 f_pred = self.net_F(X, t, lambda1_sample, lambda2_sample, lambda3_sample)
             else:
                 u_pred, log_noise_u, KL_loss_para = self.net_U(X, t)
@@ -148,7 +152,7 @@ class BBP_Model_PINN_AC(BBP_Model_PINN):
 
         # KL_loss_total = KL_loss_para 
         # minibatches and KL reweighting
-        KL_loss_total = KL_loss_total/self.n_batches
+        KL_loss_total = KL_loss_total/self.n_batches/n_samples
         total_loss = (KL_loss_total + fit_loss_U_total + fit_loss_F_total) / (n_samples*X.shape[0])
         
         total_loss.backward()
@@ -195,8 +199,9 @@ if __name__ == '__main__':
     U = torch.tensor(u_train, requires_grad = True, device = device).float()
 
     #%% model 
-    local = False
+    local = True
     identification = False
+    numerical = False
 
     learn_rate = 1e-3
     opt = torch.optim.AdamW
@@ -204,16 +209,18 @@ if __name__ == '__main__':
     n_hidden = 20
     layers = [2, n_hidden, n_hidden, n_hidden, n_hidden, n_hidden, n_hidden, 2]
     
-    prior = spike_slab_2GMM(mu1 = 0, mu2 = 0, sigma1 = 0.1, sigma2 = 0.0005, pi = 0.75)
+    # prior = spike_slab_2GMM(mu1 = 0, mu2 = 0, sigma1 = 0.1, sigma2 = 0.0005, pi = 0.75)
+    prior = gaussian(0, 1)
 
-    num_epochs = 25000
+    num_epochs = 25000 
+
     n_batches = 1
     batch_size = len(X_u_train)
 
     pinn_model = BBP_Model_PINN_AC(xt_lb, xt_ub, u_min, u_max,
                                         layers, loss_func, opt, local,
                                         learn_rate, batch_size, n_batches,
-                                        prior, device)
+                                        prior, numerical, identification, device)
     #%%
     
     writer = SummaryWriter(comment = '_test3_with_AC')
@@ -223,9 +230,13 @@ if __name__ == '__main__':
     KL_loss_train = np.zeros(num_epochs)
     loss = np.zeros(num_epochs)
 
+
     for i in range(num_epochs):
 
-        EU, EF, KL_loss, total_loss = pinn_model.fit(X, t, U, n_samples = 10)
+        
+        n_samples = 20 if i < 10 else 10
+
+        EU, EF, KL_loss, total_loss = pinn_model.fit(X, t, U, n_samples = n_samples)
         
         fit_loss_U_train[i] = EU.item()
         fit_loss_F_train[i] = EF.item()
@@ -337,6 +348,11 @@ if __name__ == '__main__':
     axs[2].set_title('$t = 0.75$', fontsize = 10)
     
 
-    plt.savefig('./plots/final_prediction_burgers.tiff')
+    plt.savefig('./plots/final_prediction_AC.tiff')
+
+# %%
+
+for name, para in pinn_model.network.named_parameters():
+    print(name, para)
 
 # %%

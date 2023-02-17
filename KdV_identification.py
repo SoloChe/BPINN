@@ -19,11 +19,17 @@ from model import BBP_Model_PINN
 
 class BBP_Model_PINN_KdV(BBP_Model_PINN):
     def __init__(self, xt_lb, xt_ub, u_lb, u_ub, 
-                    layers, loss_func, opt, local, 
-                    learn_rate, batch_size, n_batches, device):
+                    layers, loss_func, opt, local, res, activation,
+                    learn_rate, batch_size, n_batches, 
+                    prior, numerical, identification, device):
+
+
+
+
         super().__init__(xt_lb, xt_ub, u_lb, u_ub, 
-                            layers, loss_func, opt, local, 
-                            learn_rate, batch_size, n_batches, device)
+                            layers, loss_func, opt, local, res, activation,
+                            learn_rate, batch_size, n_batches, 
+                            prior, numerical, identification, device)
 
     def initial_para(self):
        
@@ -32,21 +38,27 @@ class BBP_Model_PINN_KdV(BBP_Model_PINN):
         self.lambda2_mus = nn.Parameter(torch.Tensor(1).uniform_(0, 0.05))
         self.lambda2_rhos = nn.Parameter(torch.Tensor(1).uniform_(-3, -2))
 
+        self.alpha = nn.Parameter(torch.Tensor(1).uniform_(0, 2))
+        # self.beta = nn.Parameter(torch.Tensor(1).uniform_(0, 1))
+
         self.network.register_parameter('lambda1_mu', self.lambda1_mus)
         self.network.register_parameter('lambda2_mu', self.lambda2_mus)
         self.network.register_parameter('lambda1_rho', self.lambda1_rhos)
         self.network.register_parameter('lambda2_rho', self.lambda2_rhos)
+        self.network.register_parameter('alpha', self.alpha)
+        # self.network.register_parameter('beta', self.beta)
 
-        self.prior_lambda1 = gaussian(0, 1)
-        self.prior_lambda2 = gaussian(0, 1)
+        self.prior_lambda1 = self.prior
+        self.prior_lambda2 = self.prior
 
   
 
-    def net_F(self, x, t, lambda1_sample, lambda2_sample):
-        lambda_1 = torch.exp(lambda1_sample)        
-        lambda_2 = torch.exp(lambda2_sample)
+    def net_F(self, x, t, u, lambda1_sample, lambda2_sample):
+        lambda_1 = lambda1_sample       
+        lambda_2 = lambda2_sample
 
-        u, _, _ = self.net_U(x, t)
+        # u, _, _ = self.net_U(x, t)
+
         u = u*(self.u_ub-self.u_lb) + self.u_lb # reverse scaling
 
         u_t = torch.autograd.grad(u, t, torch.ones_like(u),
@@ -80,7 +92,7 @@ class BBP_Model_PINN_KdV(BBP_Model_PINN):
         fit_loss_F_total = 0
         fit_loss_U_total = 0
 
-        for i in range(n_samples):
+        for _ in range(n_samples):
             lambda1_epsilons = self.lambda1_mus.data.new(self.lambda1_mus.size()).normal_()
             lambda1_stds = torch.log(1 + torch.exp(self.lambda1_rhos))
             lambda2_epsilons = self.lambda2_mus.data.new(self.lambda2_mus.size()).normal_()
@@ -90,12 +102,12 @@ class BBP_Model_PINN_KdV(BBP_Model_PINN):
             lambda2_sample = self.lambda2_mus + lambda2_epsilons * lambda2_stds
 
             u_pred, log_noise_u, KL_loss_para = self.net_U(X, t)
-            f_pred = self.net_F(X, t, lambda1_sample, lambda2_sample)
+            f_pred = self.net_F(X, t, u_pred, lambda1_sample, lambda2_sample)
 
             # calculate fit loss based on mean and standard deviation of output
             fit_loss_U_total += self.loss_func(u_pred, U, log_noise_u.exp(), self.network.output_dim)
-            fit_loss_F_total += torch.sum(f_pred**2) ######
-            # fit_loss_F_total += self.loss_func(f_pred, torch.zeros_like(f_pred), self.network.log_noise_f.exp(), self.network.output_dim)
+            # fit_loss_F_total += torch.sum(f_pred**2) ######
+            fit_loss_F_total += self.loss_func(f_pred, torch.zeros_like(f_pred), (self.alpha.exp()+1)*torch.ones_like(f_pred), self.network.output_dim)
 
         KL_loss_lambda1 = get_kl_Gaussian_divergence(self.prior_lambda1.mu, self.prior_lambda1.sigma**2, self.lambda1_mus, lambda1_stds**2)
         KL_loss_lambda2 = get_kl_Gaussian_divergence(self.prior_lambda2.mu, self.prior_lambda2.sigma**2, self.lambda2_mus, lambda2_stds**2)
@@ -104,11 +116,18 @@ class BBP_Model_PINN_KdV(BBP_Model_PINN):
         # KL_loss_total = KL_loss_para 
         # minibatches and KL reweighting
         KL_loss_total = KL_loss_total/self.n_batches
-        total_loss = (KL_loss_total + fit_loss_U_total + fit_loss_F_total) / (n_samples*X.shape[0])
+         
+ 
+
+        # self.coef = F.softmax(self.alpha)
+        self.coef = self.alpha.exp() + 1
+        total_loss = KL_loss_total + (fit_loss_U_total + fit_loss_F_total) 
+        total_loss /= (n_samples*X.shape[0])
+        
         
         total_loss.backward()
         self.optimizer.step()
-        # self.scheduler.step()
+        self.scheduler.step()
 
         return fit_loss_U_total/n_samples, fit_loss_F_total/n_samples, KL_loss_total, total_loss
 
@@ -121,14 +140,14 @@ if __name__ == '__main__':
     x = data['x'].flatten()[:,None] # 512 x 1 
     Exact_ = np.real(data['uu']).T # 201 x 512
 
-    noise = 0
+    noise = 0.1
     Exact = Exact_ + noise*np.std(Exact_)*np.random.randn(201, 512)
 
     X, T = np.meshgrid(x,t) # 201 x 512
     X_star = np.hstack((X.flatten()[:,None], T.flatten()[:,None])) # 102912 x 2
     u_star = Exact.flatten()[:,None]  # 102912 x 1
 
-    N_u_test = 20000
+    N_u_test = 10000
     idx_test = np.random.choice(X_star.shape[0], N_u_test, replace = False)
     X_test = X_star[idx_test,:]
     u_test = u_star[idx_test,:]
@@ -136,8 +155,9 @@ if __name__ == '__main__':
     xt_lb = X_star.min(0)
     xt_ub = X_star.max(0)
 
+
     # training data
-    N_u = 3000
+    N_u = 1000
     idx = np.random.choice(X_star.shape[0], N_u, replace = False)
     X_u_train = X_star[idx,:]
 
@@ -152,20 +172,30 @@ if __name__ == '__main__':
 
     #%% model 
     local = True
+    identification = True
+    numerical = False
 
     learn_rate = 1e-3
+    n_hidden = 50
     opt = torch.optim.AdamW
     loss_func = log_gaussian_loss
-    layers = [2, 50, 50, 50, 50, 50, 50, 2]
-        
+    # layers = [2, n_hidden, n_hidden, n_hidden, n_hidden, n_hidden, 2]
+
+    layers = [2, n_hidden, n_hidden, n_hidden, 2] # res
+    
+    
+    prior = gaussian(0, 1)
+
     num_epochs = 25000
     n_batches = 1
     batch_size = len(X_u_train)
 
+    res = True
+    activation = nn.Tanh()
     pinn_model = BBP_Model_PINN_KdV(xt_lb, xt_ub, u_min, u_max,
-                                        layers, loss_func, opt, local,
+                                        layers, loss_func, opt, local, res, activation,
                                         learn_rate, batch_size, n_batches,
-                                        device)
+                                        prior, numerical, identification, device)
     #%%
     
     writer = SummaryWriter(comment = '_test3_with_KdV')
@@ -177,12 +207,13 @@ if __name__ == '__main__':
 
     for i in range(num_epochs):
 
-        EU, EF, KL_loss, total_loss = pinn_model.fit(X, t, U, n_samples = 10)
+        EU, EF, KL_loss, total_loss = pinn_model.fit(X, t, U, n_samples = 20)
         
         fit_loss_U_train[i] = EU.item()
         fit_loss_F_train[i] = EF.item()
         KL_loss_train[i] = KL_loss.item()
         loss[i] = total_loss.item()
+        
 
         writer.add_scalar("loss/total_loss", loss[i], i)
         writer.add_scalar("loss/U_loss", fit_loss_U_train[i], i)
@@ -190,51 +221,53 @@ if __name__ == '__main__':
         writer.add_scalar("loss/KL_loss", KL_loss_train[i], i)
         
 
-        # if i % 2000 == 0:
+        # if i % 1000 == 0:
         #     F_test = net.sample_F(X_u_test_25)
         #     fig, axs = plt.subplots(2, 2, figsize=(20, 8))
         #     axs[0,0].hist(F_test[:,0])
         #     axs[0,1].hist(F_test[:,100])
         #     axs[1,0].hist(F_test[:,150])
         #     axs[1,1].hist(F_test[:,255])
-        #     plt.savefig('./plots/epoch{}.tiff'.format(i))
+        #     plt.savefig('./plots/kdv_epoch{}_F.tiff'.format(i))
 
 
-        if i % 100 == 0 or i == num_epochs - 1:
+        if i % 10 == 0 or i == num_epochs - 1:
 
             print("Epoch: {:5d}/{:5d}, total loss = {:.3f}, Fit loss U = {:.3f}, Fit loss F = {:.3f}, KL loss = {:.3f}".format(i + 1, num_epochs, 
                 loss[i], fit_loss_U_train[i], fit_loss_F_train[i], KL_loss_train[i]))
 
         
-            lambda1_mus = np.exp(pinn_model.lambda1_mus.item())
+            lambda1_mus = pinn_model.lambda1_mus.item()
             lambda1_stds = torch.log(1 + torch.exp(pinn_model.lambda1_rhos)).item()
             
-            lambda2_mus = np.exp(pinn_model.lambda2_mus.item())
+            lambda2_mus = pinn_model.lambda2_mus.item()
             lambda2_stds = torch.log(1 + torch.exp(pinn_model.lambda2_rhos)).item()
             
-            samples_star, _ = pinn_model.predict(X_test, 50, pinn_model.network)
-            u_pred_star = samples_star.mean(axis = 0)
-            error_star = np.linalg.norm(u_test-u_pred_star, 2)/np.linalg.norm(u_test, 2)
+            if i % 100 == 0 or i == num_epochs - 1:
+                samples_star, _ = pinn_model.predict(X_test, 50, pinn_model.network)
+                u_pred_star = samples_star.mean(axis = 0)
+                error_star = np.linalg.norm(u_test-u_pred_star, 2)/np.linalg.norm(u_test, 2)
 
-            samples_train, _ = pinn_model.predict(X_u_train, 50, pinn_model.network)
-            u_pred_train = samples_train.mean(axis=0)
-            error_train = np.linalg.norm(u_train-u_pred_train, 2)/np.linalg.norm(u_train, 2)
-
-
-            # writer.add_scalars("loss/train_test", {'train':error_train, 'test':error_25}, i)
-            # writer.add_scalars("loss/f_u", {'noise_f':noise_f, 'noise_u':noise_u}, i)
+                samples_train, _ = pinn_model.predict(X_u_train, 50, pinn_model.network)
+                u_pred_train = samples_train.mean(axis=0)
+                error_train = np.linalg.norm(u_train-u_pred_train, 2)/np.linalg.norm(u_train, 2)
+                print("Epoch: {:5d}/{:5d}, error_test = {:.5f}, error_train = {:.5f}".format(i+1, num_epochs, error_star, error_train))
+                writer.add_scalars("loss/train_test", {'train':error_train, 'test':error_star}, i)
         
-            print("Epoch: {:5d}/{:5d}, lambda1_mu = {:.3f}, lambda2_mu = {:.3f}, lambda1_std = {:.3f}, lambda2_std = {:.3f}".format(i + 1, num_epochs,
+            print("Epoch: {:5d}/{:5d}, lambda1_mu = {:.5f}, lambda2_mu = {:.5f}, lambda1_std = {:.3f}, lambda2_std = {:.3f}".format(i + 1, num_epochs,
                                                                                                                             lambda1_mus, lambda2_mus,
                                                                                                                             lambda1_stds, lambda2_stds))
-            print("Epoch: {:5d}/{:5d}, error_test = {:.5f}, error_train = {:.5f}".format(i+1, num_epochs, error_star, error_train))
-            # print("Epoch: {:5d}/{:5d}, noise_f = {:.5f}, noise_u = {:.5f}".format(i+1, num_epochs, noise_f, noise_u))
+            
+            # print("Epoch: {:5d}/{:5d}, alpha = {:.5f}, beta = {:.5f}".format(i+1, num_epochs, pinn_model.coef[0].item(), pinn_model.coef[1].item()))
+            print("Epoch: {:5d}/{:5d}, alpha = {:.5f}".format(i+1, num_epochs, pinn_model.coef.item()))
+
             print()
 
     writer.close()
     #%%
 
     x = data['x'].flatten()[:,None]
+    X_u_test_15 = np.hstack([x, 0.15*np.ones_like((x))]); u_test_15 = Exact[30]; u_mean_15 = Exact_[30]
     X_u_test_25 = np.hstack([x, 0.25*np.ones_like((x))]); u_test_25 = Exact[50]; u_mean_25 = Exact_[50]
     X_u_test_50 = np.hstack([x, 0.50*np.ones_like((x))]); u_test_50 = Exact[100]; u_mean_50 = Exact_[100]
     X_u_test_75 = np.hstack([x, 0.75*np.ones_like((x))]); u_test_75 = Exact[150]; u_mean_75 = Exact_[150]
@@ -265,7 +298,6 @@ if __name__ == '__main__':
     axs[0].set_xlabel('$x$')
     axs[0].set_ylabel('$u(t,x)$')
     axs[0].set_title('$t = 0.25$', fontsize = 10)
-    axs[0].axis('square')
 
     axs[1].scatter(x, u_test_50, s = 10, marker = 'x', color = 'black', alpha = 0.5, label = 'Exact')
     axs[1].plot(x, u_mean_50, 'b-', linewidth = 2, label = 'Prediction')
@@ -274,7 +306,7 @@ if __name__ == '__main__':
     axs[1].set_xlabel('$x$')
     axs[1].set_ylabel('$u(t,x)$')
     axs[1].set_title('$t = 0.5$', fontsize = 10)
-    axs[1].axis('square')
+    
 
 
     axs[2].scatter(x, u_test_75, s = 10, marker = 'x', color = 'black', alpha = 0.5, label = 'Exact')
@@ -286,4 +318,4 @@ if __name__ == '__main__':
     axs[2].set_title('$t = 0.75$', fontsize = 10)
     
 
-    plt.savefig('./plots/final_prediction_burgers.tiff')
+    plt.savefig('./plots/final_prediction_KdV.tiff')

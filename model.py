@@ -3,14 +3,16 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from utils import log_gaussian_loss, gaussian, get_kl_Gaussian_divergence, get_kl_divergence
-import priors
+from priors import isotropic_gauss_loglike
 
 class BayesLinear_Normalq(nn.Module):
-    def __init__(self, input_dim, output_dim, prior):
+    def __init__(self, input_dim, output_dim, prior, numerical):
         super(BayesLinear_Normalq, self).__init__()
         self.input_dim = input_dim
         self.output_dim = output_dim
         self.prior = prior
+
+        self.numerical = numerical
 
         self.weight_mus = nn.Parameter(torch.Tensor(self.input_dim, self.output_dim).uniform_(-0.05, 0.05))
         self.weight_rhos = nn.Parameter(torch.Tensor(self.input_dim, self.output_dim).uniform_(-3, -2))
@@ -34,14 +36,16 @@ class BayesLinear_Normalq(nn.Module):
             bias_sample = self.bias_mus + bias_epsilons * bias_stds
             output = torch.mm(x, weight_sample) + bias_sample
 
-            
             # computing the KL loss term
-            varpost_weight = gaussian(self.weight_mus, weight_stds)
-            varpost_bias = gaussian(self.bias_mus, bias_stds)
-            KL_loss_weight = get_kl_divergence(weight_sample, self.prior, varpost_weight)
-            KL_loss_bias = get_kl_divergence(bias_sample, self.prior, varpost_bias)
-            # KL_loss_weight = get_kl_Gaussian_divergence(self.prior.mu, self.prior.sigma**2, self.weight_mus, weight_stds**2)
-            # KL_loss_bias = get_kl_Gaussian_divergence(self.prior.mu, self.prior.sigma**2, self.bias_mus, bias_stds**2)
+            if self.numerical:
+                varpost_weight = gaussian(self.weight_mus, weight_stds)
+                varpost_bias = gaussian(self.bias_mus, bias_stds)
+                KL_loss_weight = get_kl_divergence(weight_sample, self.prior, varpost_weight)
+                KL_loss_bias = get_kl_divergence(bias_sample, self.prior, varpost_bias)
+            else: # Gaussian prior
+                KL_loss_weight = get_kl_Gaussian_divergence(self.prior.mu, self.prior.sigma**2, self.weight_mus, weight_stds**2)
+                KL_loss_bias = get_kl_Gaussian_divergence(self.prior.mu, self.prior.sigma**2, self.bias_mus, bias_stds**2)
+            
             KL_loss = KL_loss_weight + KL_loss_bias
 
             return output, KL_loss
@@ -85,7 +89,7 @@ class BayesLinear_Normalq_local(nn.Module):
 
             output = act_W_out + act_b_out
 
-            ## todo
+
             KL_loss_weight = get_kl_Gaussian_divergence(self.prior.mu, self.prior.sigma**2, self.W_mu, std_w**2)
             KL_loss_bias = get_kl_Gaussian_divergence(self.prior.mu, self.prior.sigma**2, self.b_mu, std_b**2)
             KL_loss = KL_loss_weight + KL_loss_bias
@@ -95,27 +99,26 @@ class BayesLinear_Normalq_local(nn.Module):
             return output
 
 class BBP_Model(nn.Module):
-    def __init__(self, layers, prior, local = False):
+    def __init__(self, activation, layers, prior, local = False, numerical = False):
         super(BBP_Model, self).__init__()
 
         n_layer = len(layers)
-        self.output_dim = layers[-1] - 1
+        self.output_dim = 1
         self.layer_list = []
         
-
-        self.activation = nn.Tanh()
+        self.activation = activation # nn.Tanh()
         for i in range(n_layer - 2):
             if local:
                 b_layer = BayesLinear_Normalq_local(layers[i], layers[i+1], prior)
             else:
-                b_layer = BayesLinear_Normalq(layers[i], layers[i+1], prior)
+                b_layer = BayesLinear_Normalq(layers[i], layers[i+1], prior, numerical)
             self.layer_list.append(b_layer)
             
         # last layer
         if local:
-            self.last_layer = BayesLinear_Normalq_local(layers[n_layer - 2], layers[n_layer - 1], gaussian(0, 1))
+            self.last_layer = BayesLinear_Normalq_local(layers[n_layer - 2], layers[n_layer - 1], prior)
         else:
-            self.last_layer = BayesLinear_Normalq(layers[n_layer - 2], layers[n_layer - 1], gaussian(0, 1))
+            self.last_layer = BayesLinear_Normalq(layers[n_layer - 2], layers[n_layer - 1], prior, numerical)
 
         self.layer_list_torch = nn.ModuleList(self.layer_list)
      
@@ -130,11 +133,78 @@ class BBP_Model(nn.Module):
         KL_loss_total += KL_loss
         return x, KL_loss_total
 
+class Res_block(nn.Module):
+    def __init__(self, activation, local, input_dim, output_dim, prior, numerical) -> None:
+        super().__init__()
+        
+        # self.activation = nn.Tanh()
+        self.activation = activation
+       
+        if local:
+            self.b_layer1 = BayesLinear_Normalq_local(input_dim, output_dim, prior)
+            self.b_layer2 = BayesLinear_Normalq_local(input_dim, output_dim, prior)
+        else:
+            self.b_layer1 = BayesLinear_Normalq(input_dim, output_dim, prior, numerical)
+            self.b_layer2 = BayesLinear_Normalq(input_dim, output_dim, prior, numerical)
+    
+    def forward(self, x):
+        KL_loss_total = 0
+        res = x
+
+        out, KL_loss = self.b_layer1(x)
+        out = self.activation(out)
+        KL_loss_total += KL_loss
+
+        out, KL_loss = self.b_layer2(out)
+        KL_loss_total += KL_loss
+
+        out = self.activation(out + res)
+        return out, KL_loss_total
+
+
+class BBP_Model_res(nn.Module):
+    def __init__(self, activation, layers, prior, local = False, numerical = False):
+        super(BBP_Model_res, self).__init__()
+        self.activation = activation
+        self.output_dim = 1
+        self.layer_list = []
+        n_layer = len(layers)
+
+        if local:
+            input_layer = BayesLinear_Normalq_local(layers[0], layers[1], prior)
+            self.last_layer = BayesLinear_Normalq_local(layers[n_layer - 2], layers[n_layer - 1], prior)
+        else:
+            input_layer = BayesLinear_Normalq(layers[0], layers[1], prior, numerical)
+            self.last_layer = BayesLinear_Normalq(layers[n_layer - 2], layers[n_layer - 1], prior, numerical)
+
+        self.layer_list.append(input_layer)
+
+        for i in range(1, n_layer-2):
+            res_block = Res_block(activation, local, layers[i], layers[i+1], prior, numerical)
+            self.layer_list.append(res_block)
+
+        self.layer_list_torch = nn.ModuleList(self.layer_list)
+
+    def forward(self, x):
+        KL_loss_total = 0
+        
+
+        for layer in self.layer_list_torch:
+            x, KL_loss = layer(x)
+            x = self.activation(x)
+            KL_loss_total += KL_loss
+        
+        x, KL_loss = self.last_layer(x)
+        KL_loss_total += KL_loss
+        return x, KL_loss_total
+
+
+
 class BBP_Model_PINN:
     def __init__(self, xt_lb, xt_ub, u_lb, u_ub,
-                 layers, loss_func, opt, local,
+                 layers, loss_func, opt, local, res, activation,
                  learn_rate, batch_size, n_batches,
-                 prior, device):
+                 prior, numerical, identification, device):
 
         self.device = device
         self.xt_lb = torch.from_numpy(xt_lb).float().to(self.device)
@@ -148,22 +218,30 @@ class BBP_Model_PINN:
         self.n_batches = n_batches
 
         self.prior = prior
+        if res:
+            self.network = BBP_Model_res(activation, layers, prior, local, numerical)
+        else:
+            self.network = BBP_Model(activation, layers, prior, local, numerical)
 
-        self.network = BBP_Model(layers, self.prior, local)
         self.loss_func = loss_func
         
         # self.optimizer = torch.optim.SGD(self.network.parameters(), lr = self.learn_rate)
         
-        # self.scheduler = torch.optim.lr_scheduler.OneCycleLR(self.optimizer, max_lr = 1e-3, 
-        #                                     steps_per_epoch = no_batches, epochs = num_epochs)
         
+        self.numerical = numerical
+        self.identification = identification
         self.initial_para()
         self.network = self.network.to(self.device)
         self.optimizer = opt(self.network.parameters(), lr = self.learn_rate)
+        self.scheduler = torch.optim.lr_scheduler.OneCycleLR(self.optimizer, max_lr = 2e-3, 
+                                            div_factor = 10, final_div_factor = 10,
+                                            steps_per_epoch = 1, epochs = 25000 )
     
 
     def initial_para(self):
-        raise NotImplementedError('initialize parameters in PDE/ODE first.')     
+        raise NotImplementedError('initialize parameters in PDE/ODE first.') 
+       
+
     def net_F(self):
         raise NotImplementedError('You need to define physical law.')
     def fit(self):
@@ -176,6 +254,7 @@ class BBP_Model_PINN:
 
         u = out[:, 0:1]
         log_noise_u = out[:, 1:2]
+        # log_noise_f = out[:, 2:3]
         return u, log_noise_u, KL_loss
 
     def predict(self, xt, n_sample, best_net):
