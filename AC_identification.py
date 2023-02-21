@@ -19,12 +19,12 @@ print('device: {}'.format(device))
 from model import BBP_Model_PINN
 
 class BBP_Model_PINN_AC(BBP_Model_PINN):
-    def __init__(self, xt_lb, xt_ub, u_lb, u_ub, 
-                    layers, loss_func, opt, local, 
+    def __init__(self, xt_lb, xt_ub, u_lb, u_ub, normal,
+                    layers, loss_func, opt, local, res, activation,
                     learn_rate, batch_size, n_batches, 
                     prior, numerical, identification, device):
-        super().__init__(xt_lb, xt_ub, u_lb, u_ub, 
-                            layers, loss_func, opt, local, 
+        super().__init__(xt_lb, xt_ub, u_lb, u_ub, normal,
+                            layers, loss_func, opt, local, res, activation,
                             learn_rate, batch_size, n_batches, 
                             prior, numerical, identification, device)
 
@@ -36,6 +36,7 @@ class BBP_Model_PINN_AC(BBP_Model_PINN):
         self.lambda2_rhos = nn.Parameter(torch.Tensor(1).uniform_(-3, -2))
         self.lambda3_mus = nn.Parameter(torch.Tensor(1).uniform_(0, 0.05))
         self.lambda3_rhos = nn.Parameter(torch.Tensor(1).uniform_(-3, -2))
+        self.alpha = nn.Parameter(torch.Tensor(1).uniform_(0, 2))
 
         self.network.register_parameter('lambda1_mu', self.lambda1_mus)
         self.network.register_parameter('lambda2_mu', self.lambda2_mus)
@@ -43,6 +44,7 @@ class BBP_Model_PINN_AC(BBP_Model_PINN):
         self.network.register_parameter('lambda1_rho', self.lambda1_rhos)
         self.network.register_parameter('lambda2_rho', self.lambda2_rhos)
         self.network.register_parameter('lambda3_rho', self.lambda3_rhos)
+        self.network.register_parameter('alpha', self.alpha)
 
         self.prior_lambda1 = self.prior
         self.prior_lambda2 = self.prior
@@ -50,12 +52,12 @@ class BBP_Model_PINN_AC(BBP_Model_PINN):
 
   
 
-    def net_F(self, x, t, lambda1_sample, lambda2_sample, lambda3_sample):
+    def net_F(self, x, t, u, lambda1_sample, lambda2_sample, lambda3_sample):
         lambda_1 = torch.exp(lambda1_sample)        
         lambda_2 = torch.exp(lambda2_sample)
         lambda_3 = torch.exp(lambda3_sample)
 
-        u, _, _ = self.net_U(x, t)
+        # u, _, _ = self.net_U(x, t)
         u = u*(self.u_ub-self.u_lb) + self.u_lb # reverse scaling
 
         u_t = torch.autograd.grad(u, t, torch.ones_like(u),
@@ -72,9 +74,9 @@ class BBP_Model_PINN_AC(BBP_Model_PINN):
         # 0.0001 5 5
         return F
 
-    def net_F_inference(self, x, t):
+    def net_F_inference(self, x, t, u):
        
-        u, _, _ = self.net_U(x, t)
+        # u, _, _ = self.net_U(x, t)
         u = u*(self.u_ub-self.u_lb) + self.u_lb # reverse scaling
 
         u_t = torch.autograd.grad(u, t, torch.ones_like(u),
@@ -104,7 +106,6 @@ class BBP_Model_PINN_AC(BBP_Model_PINN):
       
         fit_loss_F_total = 0
         fit_loss_U_total = 0
-        KL_loss_total = 0
 
         for _ in range(n_samples):
             
@@ -120,38 +121,28 @@ class BBP_Model_PINN_AC(BBP_Model_PINN):
                 lambda2_sample = self.lambda2_mus + lambda2_epsilons * lambda2_stds
                 lambda3_sample = self.lambda3_mus + lambda3_epsilons * lambda3_stds
 
-                if self.numerical:
-                    varpost_lambda1 = gaussian(self.lambda1_mus, lambda1_stds)
-                    varpost_lambda2 = gaussian(self.lambda2_mus, lambda2_stds)
-                    varpost_lambda3 = gaussian(self.lambda3_mus, lambda3_stds)
-
-                    KL_loss_lambda1 = get_kl_divergence(lambda1_sample, self.prior, varpost_lambda1)
-                    KL_loss_lambda2 = get_kl_divergence(lambda2_sample, self.prior, varpost_lambda2)
-                    KL_loss_lambda3 = get_kl_divergence(lambda3_sample, self.prior, varpost_lambda3)
-                else:
-
-                    KL_loss_lambda1 = get_kl_Gaussian_divergence(self.prior_lambda1.mu, self.prior_lambda1.sigma**2, self.lambda1_mus, lambda1_stds**2)
-                    KL_loss_lambda2 = get_kl_Gaussian_divergence(self.prior_lambda2.mu, self.prior_lambda2.sigma**2, self.lambda2_mus, lambda2_stds**2)
-                    KL_loss_lambda3 = get_kl_Gaussian_divergence(self.prior_lambda3.mu, self.prior_lambda3.sigma**2, self.lambda3_mus, lambda3_stds**2)
+               
+                KL_loss_lambda1 = get_kl_Gaussian_divergence(self.prior_lambda1.mu, self.prior_lambda1.sigma**2, self.lambda1_mus, lambda1_stds**2)
+                KL_loss_lambda2 = get_kl_Gaussian_divergence(self.prior_lambda2.mu, self.prior_lambda2.sigma**2, self.lambda2_mus, lambda2_stds**2)
+                KL_loss_lambda3 = get_kl_Gaussian_divergence(self.prior_lambda3.mu, self.prior_lambda3.sigma**2, self.lambda3_mus, lambda3_stds**2)
                 
                 u_pred, log_noise_u, KL_loss_para = self.net_U(X, t)
-                KL_loss_total += (KL_loss_para + KL_loss_lambda1 + KL_loss_lambda2 + KL_loss_lambda3)
-                f_pred = self.net_F(X, t, lambda1_sample, lambda2_sample, lambda3_sample)
+                KL_loss_total = KL_loss_para + KL_loss_lambda1 + KL_loss_lambda2 + KL_loss_lambda3
+                f_pred = self.net_F(X, t, u_pred, lambda1_sample, lambda2_sample, lambda3_sample)
             else:
                 u_pred, log_noise_u, KL_loss_para = self.net_U(X, t)
-                f_pred = self.net_F_inference(X, t)
-                KL_loss_total += KL_loss_para
+                f_pred = self.net_F_inference(X, t, u_pred)
+                KL_loss_total = KL_loss_para
 
             
 
             # calculate fit loss based on mean and standard deviation of output
             fit_loss_U_total += self.loss_func(u_pred, U, log_noise_u.exp(), self.network.output_dim)
-            fit_loss_F_total += torch.sum(f_pred**2) ######
-            # fit_loss_F_total += self.loss_func(f_pred, torch.zeros_like(f_pred), self.network.log_noise_f.exp(), self.network.output_dim)
-
+            fit_loss_F_total += self.loss_func(f_pred, torch.zeros_like(f_pred), (self.alpha.exp()+1)*torch.ones_like(f_pred), self.network.output_dim)
 
         # KL_loss_total = KL_loss_para 
         # minibatches and KL reweighting
+        self.coef = self.alpha.exp()+1
         KL_loss_total = KL_loss_total/self.n_batches/n_samples
         total_loss = (KL_loss_total + fit_loss_U_total + fit_loss_F_total) / (n_samples*X.shape[0])
         
@@ -181,12 +172,13 @@ if __name__ == '__main__':
     idx_test = np.random.choice(X_star.shape[0], N_u_test, replace = False)
     X_test = X_star[idx_test,:]
     u_test = u_star[idx_test,:]
+
     # Domain bounds of x, t
     xt_lb = X_star.min(0)
     xt_ub = X_star.max(0)
 
     # training data
-    N_u = 3000
+    N_u = 2000
     idx = np.random.choice(X_star.shape[0], N_u, replace = False)
     X_u_train = X_star[idx,:]
     u_train = u_star[idx,:]
@@ -200,30 +192,43 @@ if __name__ == '__main__':
 
     #%% model 
     local = True
-    identification = False
+    identification = True
     numerical = False
 
-    learn_rate = 1e-3
+    learn_rate = 2e-3
     opt = torch.optim.AdamW
     loss_func = log_gaussian_loss
-    n_hidden = 20
-    layers = [2, n_hidden, n_hidden, n_hidden, n_hidden, n_hidden, n_hidden, 2]
     
+    
+
     # prior = spike_slab_2GMM(mu1 = 0, mu2 = 0, sigma1 = 0.1, sigma2 = 0.0005, pi = 0.75)
     prior = gaussian(0, 1)
 
-    num_epochs = 25000 
+    num_epochs = 40000 
 
     n_batches = 1
     batch_size = len(X_u_train)
 
-    pinn_model = BBP_Model_PINN_AC(xt_lb, xt_ub, u_min, u_max,
-                                        layers, loss_func, opt, local,
+    res = True
+    normal = True
+    n_hidden = 50
+    activation = nn.Tanh()
+
+    
+    if res:
+        layers = [2, n_hidden, n_hidden, n_hidden, 2] # res
+    else:
+        layers = [2, n_hidden, n_hidden, n_hidden, n_hidden, n_hidden, 2]
+
+    pinn_model = BBP_Model_PINN_AC(xt_lb, xt_ub, u_min, u_max, normal,
+                                        layers, loss_func, opt, local, res, activation,
                                         learn_rate, batch_size, n_batches,
                                         prior, numerical, identification, device)
     #%%
-    
-    writer = SummaryWriter(comment = '_test3_with_AC')
+
+    n_fit = 10
+    comment = f'AC n_sample = {N_u} n_fit = {n_fit} res = {res}'
+    writer = SummaryWriter(comment = comment)
 
     fit_loss_U_train = np.zeros(num_epochs)
     fit_loss_F_train = np.zeros(num_epochs)
@@ -233,10 +238,7 @@ if __name__ == '__main__':
 
     for i in range(num_epochs):
 
-        
-        n_samples = 20 if i < 10 else 10
-
-        EU, EF, KL_loss, total_loss = pinn_model.fit(X, t, U, n_samples = n_samples)
+        EU, EF, KL_loss, total_loss = pinn_model.fit(X, t, U, n_samples = n_fit)
         
         fit_loss_U_train[i] = EU.item()
         fit_loss_F_train[i] = EF.item()
@@ -259,23 +261,24 @@ if __name__ == '__main__':
         #     plt.savefig('./plots/epoch{}.tiff'.format(i))
 
 
-        if i % 100 == 0 or i == num_epochs - 1:
+        if i % 10 == 0 or i == num_epochs - 1:
 
             print("Epoch: {:5d}/{:5d}, total loss = {:.3f}, Fit loss U = {:.3f}, Fit loss F = {:.3f}, KL loss = {:.3f}".format(i + 1, num_epochs, 
                 loss[i], fit_loss_U_train[i], fit_loss_F_train[i], KL_loss_train[i]))
 
-        
-            samples_star, _ = pinn_model.predict(X_test, 50, pinn_model.network)
-            u_pred_star = samples_star.mean(axis = 0)
-            error_star = np.linalg.norm(u_test-u_pred_star, 2)/np.linalg.norm(u_test, 2)
+            if i % 100 == 0 or i == num_epochs - 1:
+                samples_star, _ = pinn_model.predict(X_test, 50, pinn_model.network)
+                u_pred_star = samples_star.mean(axis = 0)
+                error_star = np.linalg.norm(u_test-u_pred_star, 2)/np.linalg.norm(u_test, 2)
 
-            samples_train, _ = pinn_model.predict(X_u_train, 50, pinn_model.network)
-            u_pred_train = samples_train.mean(axis=0)
-             
-            error_train = np.linalg.norm(u_train-u_pred_train, 2)/np.linalg.norm(u_train, 2)
+                samples_train, _ = pinn_model.predict(X_u_train, 50, pinn_model.network)
+                u_pred_train = samples_train.mean(axis=0)
+                
+                error_train = np.linalg.norm(u_train-u_pred_train, 2)/np.linalg.norm(u_train, 2)
 
 
-            writer.add_scalars("loss/train_test", {'train':error_train, 'test':error_star}, i)
+                writer.add_scalars("loss/train_test", {'train':error_train, 'test':error_star}, i)
+                print("Epoch: {:5d}/{:5d}, error_test = {:.5f}, error_train = {:.5f}".format(i+1, num_epochs, error_star, error_train))
 
             if identification:
                 lambda1_mus = np.exp(pinn_model.lambda1_mus.item())
@@ -286,11 +289,11 @@ if __name__ == '__main__':
 
                 lambda3_mus = np.exp(pinn_model.lambda3_mus.item())
                 lambda3_stds = torch.log(1 + torch.exp(pinn_model.lambda3_rhos)).item()
-                print("Epoch: {:5d}/{:5d}, lambda1_mu = {:.3f}, lambda2_mu = {:.3f}, lambda3_mu = {:.3f}, lambda1_std = {:.3f}, lambda2_std = {:.3f}, lambda3_std = {:.3f}".format(i + 1, num_epochs,
+                print("Epoch: {:5d}/{:5d}, lambda1_mu = {:.5f}, lambda2_mu = {:.3f}, lambda3_mu = {:.3f}, lambda1_std = {:.3f}, lambda2_std = {:.3f}, lambda3_std = {:.3f}".format(i + 1, num_epochs,
                                                                                                                                                 lambda1_mus, lambda2_mus, lambda3_mus,
                                                                                                                                                 lambda1_stds, lambda2_stds, lambda3_stds))
-            print("Epoch: {:5d}/{:5d}, error_test = {:.5f}, error_train = {:.5f}".format(i+1, num_epochs, error_star, error_train))
-            # print("Epoch: {:5d}/{:5d}, noise_f = {:.5f}, noise_u = {:.5f}".format(i+1, num_epochs, noise_f, noise_u))
+            
+            print("Epoch: {:5d}/{:5d}, alpha = {:.5f}".format(i+1, num_epochs, pinn_model.coef.item()))
             print()
 
     writer.close()

@@ -201,7 +201,7 @@ class BBP_Model_res(nn.Module):
 
 
 class BBP_Model_PINN:
-    def __init__(self, xt_lb, xt_ub, u_lb, u_ub,
+    def __init__(self, xt_lb, xt_ub, u_lb, u_ub, normal,
                  layers, loss_func, opt, local, res, activation,
                  learn_rate, batch_size, n_batches,
                  prior, numerical, identification, device):
@@ -230,10 +230,12 @@ class BBP_Model_PINN:
         
         self.numerical = numerical
         self.identification = identification
+        self.normal = normal
         self.initial_para()
         self.network = self.network.to(self.device)
+        # self.optimizer = torch.optim.SGD(self.network.parameters(), lr = self.learn_rate)
         self.optimizer = opt(self.network.parameters(), lr = self.learn_rate)
-        self.scheduler = torch.optim.lr_scheduler.OneCycleLR(self.optimizer, max_lr = 2e-3, 
+        self.scheduler = torch.optim.lr_scheduler.OneCycleLR(self.optimizer, max_lr = self.learn_rate, 
                                             div_factor = 10, final_div_factor = 10,
                                             steps_per_epoch = 1, epochs = 25000 )
     
@@ -241,7 +243,6 @@ class BBP_Model_PINN:
     def initial_para(self):
         raise NotImplementedError('initialize parameters in PDE/ODE first.') 
        
-
     def net_F(self):
         raise NotImplementedError('You need to define physical law.')
     def fit(self):
@@ -249,7 +250,7 @@ class BBP_Model_PINN:
     
     def net_U(self, x, t):
         xt = torch.cat((x,t), dim=1)
-        xt = 2*(xt-self.xt_lb)/(self.xt_ub-self.xt_lb) - 1
+        xt = 2*(xt-self.xt_lb) / (self.xt_ub-self.xt_lb) - 1
         out, KL_loss = self.network(xt)
 
         u = out[:, 0:1]
@@ -262,15 +263,16 @@ class BBP_Model_PINN:
         xt = 2*(xt-self.xt_lb)/(self.xt_ub-self.xt_lb) - 1
 
         self.network.eval()
-        samples = []
+        samples = [] 
         noises = []
-        for i in range(n_sample):
+        for _ in range(n_sample):
             out_pred, _ = best_net(xt)
             u_pred = out_pred[:,0:1]
             noise_u = out_pred[:,1:2].exp()
 
-            u_pred = u_pred*(self.u_ub-self.u_lb) + self.u_lb # reverse scaling
-            noise_u = noise_u*(self.u_ub-self.u_lb)
+            if self.normal:
+                u_pred = u_pred*(self.u_ub-self.u_lb) + self.u_lb # reverse scaling
+                noise_u = noise_u*(self.u_ub-self.u_lb)
 
             samples.append(u_pred.detach().cpu().numpy())
             noises.append(noise_u.detach().cpu().numpy())

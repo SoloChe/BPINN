@@ -157,7 +157,7 @@ if __name__ == '__main__':
 
 
     # training data
-    N_u = 1000
+    N_u = 500
     idx = np.random.choice(X_star.shape[0], N_u, replace = False)
     X_u_train = X_star[idx,:]
 
@@ -179,9 +179,9 @@ if __name__ == '__main__':
     n_hidden = 50
     opt = torch.optim.AdamW
     loss_func = log_gaussian_loss
-    # layers = [2, n_hidden, n_hidden, n_hidden, n_hidden, n_hidden, 2]
 
-    layers = [2, n_hidden, n_hidden, n_hidden, 2] # res
+    layers = [2, n_hidden, n_hidden, n_hidden, n_hidden, n_hidden, 2]
+    # layers = [2, n_hidden, n_hidden, n_hidden, 2] # res
     
     
     prior = gaussian(0, 1)
@@ -190,24 +190,27 @@ if __name__ == '__main__':
     n_batches = 1
     batch_size = len(X_u_train)
 
-    res = True
+    res = False
     activation = nn.Tanh()
     pinn_model = BBP_Model_PINN_KdV(xt_lb, xt_ub, u_min, u_max,
                                         layers, loss_func, opt, local, res, activation,
                                         learn_rate, batch_size, n_batches,
                                         prior, numerical, identification, device)
     #%%
-    
-    writer = SummaryWriter(comment = '_test3_with_KdV')
+
+    n_fit = 20
+    comment = f'KdV n_sample = {N_u} n_fit = {n_fit} res = {res}'
+    writer = SummaryWriter(comment = comment)
 
     fit_loss_U_train = np.zeros(num_epochs)
     fit_loss_F_train = np.zeros(num_epochs)
     KL_loss_train = np.zeros(num_epochs)
     loss = np.zeros(num_epochs)
 
+
     for i in range(num_epochs):
 
-        EU, EF, KL_loss, total_loss = pinn_model.fit(X, t, U, n_samples = 20)
+        EU, EF, KL_loss, total_loss = pinn_model.fit(X, t, U, n_samples = n_fit)
         
         fit_loss_U_train[i] = EU.item()
         fit_loss_F_train[i] = EF.item()
