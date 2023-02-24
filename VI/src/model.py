@@ -2,8 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from Bayesian_DL.BPINN.VI.src.utils import log_gaussian_loss, gaussian, get_kl_Gaussian_divergence, get_kl_divergence
-from Bayesian_DL.BPINN.VI.src.priors import isotropic_gauss_loglike
+from src.utils import log_gaussian_loss, gaussian, get_kl_Gaussian_divergence, get_kl_divergence
+from src.priors import isotropic_gauss_loglike
 
 class BayesLinear_Normalq(nn.Module):
     def __init__(self, input_dim, output_dim, prior, numerical):
@@ -166,18 +166,16 @@ class BBP_Model_res(nn.Module):
     def __init__(self, activation, layers, prior, local = False, numerical = False):
         super(BBP_Model_res, self).__init__()
         self.activation = activation
-        self.output_dim = 1
         self.layer_list = []
         n_layer = len(layers)
 
         if local:
-            input_layer = BayesLinear_Normalq_local(layers[0], layers[1], prior)
+            self.input_layer = BayesLinear_Normalq_local(layers[0], layers[1], prior)
             self.last_layer = BayesLinear_Normalq_local(layers[n_layer - 2], layers[n_layer - 1], prior)
         else:
-            input_layer = BayesLinear_Normalq(layers[0], layers[1], prior, numerical)
+            self.input_layer = BayesLinear_Normalq(layers[0], layers[1], prior, numerical)
             self.last_layer = BayesLinear_Normalq(layers[n_layer - 2], layers[n_layer - 1], prior, numerical)
 
-        self.layer_list.append(input_layer)
 
         for i in range(1, n_layer-2):
             res_block = Res_block(activation, local, layers[i], layers[i+1], prior, numerical)
@@ -187,7 +185,10 @@ class BBP_Model_res(nn.Module):
 
     def forward(self, x):
         KL_loss_total = 0
-        
+
+        x, KL_loss = self.input_layer(x)
+        KL_loss_total += KL_loss
+        x = self.activation(x)
 
         for layer in self.layer_list_torch:
             x, KL_loss = layer(x)
@@ -217,8 +218,8 @@ class BBP_Model_PINN:
         self.batch_size = batch_size
         self.n_batches = n_batches
         
-
         self.prior = prior
+
         if res:
             self.network = BBP_Model_res(activation, layers, prior, local, numerical)
         else:
@@ -238,7 +239,7 @@ class BBP_Model_PINN:
         self.optimizer = opt(self.network.parameters(), lr = self.learn_rate)
         self.scheduler = torch.optim.lr_scheduler.OneCycleLR(self.optimizer, max_lr = self.learn_rate, 
                                             div_factor = 10, final_div_factor = 10,
-                                            steps_per_epoch = 1, epochs = 40000 )
+                                            steps_per_epoch = 7, epochs = 40000 )
     
 
     def initial_para(self):

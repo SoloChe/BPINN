@@ -6,17 +6,16 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim import Optimizer
 
-from Bayesian_DL.BPINN.VI.src.priors import spike_slab_2GMM
 
 
 import scipy.io
-from Bayesian_DL.BPINN.VI.src.utils import log_gaussian_loss, get_kl_Gaussian_divergence, gaussian, get_kl_divergence
+from src.utils import log_gaussian_loss, get_kl_Gaussian_divergence, gaussian, get_kl_divergence
 from torch.utils.tensorboard import SummaryWriter
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print('device: {}'.format(device))
 
-from Bayesian_DL.BPINN.VI.src.model import BBP_Model_PINN
+from src.model import BBP_Model_PINN
 
 class BBP_Model_PINN_AC(BBP_Model_PINN):
     def __init__(self, xt_lb, xt_ub, u_lb, u_ub, normal,
@@ -36,7 +35,8 @@ class BBP_Model_PINN_AC(BBP_Model_PINN):
         self.lambda2_rhos = nn.Parameter(torch.Tensor(1).uniform_(-3, -2))
         self.lambda3_mus = nn.Parameter(torch.Tensor(1).uniform_(0, 0.05))
         self.lambda3_rhos = nn.Parameter(torch.Tensor(1).uniform_(-3, -2))
-        self.alpha = nn.Parameter(torch.Tensor(1).uniform_(0, 2))
+        self.alpha = nn.Parameter(torch.Tensor(1).uniform_(0, 0.5))
+        self.beta = nn.Parameter(torch.Tensor(1).uniform_(0, 0.5))
 
         self.network.register_parameter('lambda1_mu', self.lambda1_mus)
         self.network.register_parameter('lambda2_mu', self.lambda2_mus)
@@ -45,6 +45,7 @@ class BBP_Model_PINN_AC(BBP_Model_PINN):
         self.network.register_parameter('lambda2_rho', self.lambda2_rhos)
         self.network.register_parameter('lambda3_rho', self.lambda3_rhos)
         self.network.register_parameter('alpha', self.alpha)
+        self.network.register_parameter('beta', self.beta)
 
         self.prior_lambda1 = self.prior
         self.prior_lambda2 = self.prior
@@ -106,7 +107,7 @@ class BBP_Model_PINN_AC(BBP_Model_PINN):
       
         fit_loss_F_total = 0
         fit_loss_U_total = 0
-
+        KL_loss_total = 0
         for _ in range(n_samples):
             
             if self.identification:
@@ -127,12 +128,12 @@ class BBP_Model_PINN_AC(BBP_Model_PINN):
                 KL_loss_lambda3 = get_kl_Gaussian_divergence(self.prior_lambda3.mu, self.prior_lambda3.sigma**2, self.lambda3_mus, lambda3_stds**2)
                 
                 u_pred, log_noise_u, KL_loss_para = self.net_U(X, t)
-                KL_loss_total = KL_loss_para + KL_loss_lambda1 + KL_loss_lambda2 + KL_loss_lambda3
+                KL_loss_total += (KL_loss_para + KL_loss_lambda1 + KL_loss_lambda2 + KL_loss_lambda3)
                 f_pred = self.net_F(X, t, u_pred, lambda1_sample, lambda2_sample, lambda3_sample)
             else:
                 u_pred, log_noise_u, KL_loss_para = self.net_U(X, t)
                 f_pred = self.net_F_inference(X, t, u_pred)
-                KL_loss_total = KL_loss_para
+                KL_loss_total += KL_loss_para
 
             
 
@@ -143,6 +144,7 @@ class BBP_Model_PINN_AC(BBP_Model_PINN):
         # KL_loss_total = KL_loss_para 
         # minibatches and KL reweighting
         self.coef = self.alpha.exp()+1
+        self.coef2 = self.beta.exp()
         KL_loss_total = KL_loss_total/self.n_batches/n_samples
         total_loss = (KL_loss_total + fit_loss_U_total + fit_loss_F_total) / (n_samples*X.shape[0])
         
@@ -155,7 +157,7 @@ class BBP_Model_PINN_AC(BBP_Model_PINN):
 
 if __name__ == '__main__':
 
-    data = scipy.io.loadmat('./Data/AC.mat')
+    data = scipy.io.loadmat('../Data/AC.mat')
 
     t = data['tt'].flatten()[:,None] # 201 x 1
     x = data['x'].flatten()[:,None] # 512 x 1 
@@ -293,7 +295,8 @@ if __name__ == '__main__':
                                                                                                                                                 lambda1_mus, lambda2_mus, lambda3_mus,
                                                                                                                                                 lambda1_stds, lambda2_stds, lambda3_stds))
             
-            print("Epoch: {:5d}/{:5d}, alpha = {:.5f}".format(i+1, num_epochs, pinn_model.coef.item()))
+            print("Epoch: {:5d}/{:5d}, alpha = {:.5f}, beta = {:.5f}".format(i+1, num_epochs, pinn_model.coef.item(), \
+                                                                            pinn_model.coef2.item()))
             print()
 
     writer.close()
@@ -362,8 +365,8 @@ if __name__ == '__main__':
     ax.set_ylabel('$u(t,x)$')
     ax.set_title('$t = 0.75$')
     
-    ax.legend(loc='upper center', bbox_to_anchor=(0.1, -0.3), ncol=2, frameon=False)
-    plt.savefig('./plots/prediction_AC.tiff')
+    # ax.legend(loc='upper center', bbox_to_anchor=(0.1, -0.3), ncol=2, frameon=False)
+    # plt.savefig('./plots/prediction_AC.tiff')
 
 
     
@@ -375,13 +378,13 @@ if __name__ == '__main__':
     plt.xlabel('$t$')
     plt.ylabel('$x$')
     plt.plot(X_u_train[:,1], X_u_train[:,0], 'kx', markersize = 2)
-    plt.savefig('./plots/prediction_AC_data.tiff')
+    # plt.savefig('./plots/prediction_AC_data.tiff')
 
     
     
 # %% save model
 model_path = './model_save'
-file_name = f'/AC_500_01.pth'
+file_name = f'/AC_{N_u}_01.pth'
 pinn_model.save_model(i, model_path + file_name)
 
 # %%

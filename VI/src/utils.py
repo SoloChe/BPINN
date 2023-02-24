@@ -1,21 +1,11 @@
 import torch
 import numpy as np
 
-def log_gaussian_loss(output, target, sigma, no_dim): # negative
+def log_gaussian_loss(output, target, sigma): # negative
 
     exponent = -0.5*(target - output)**2/sigma**2
-    # log_coeff = -no_dim*torch.log(sigma) - 0.5*no_dim*np.log(2*np.pi)
-    log_coeff = -no_dim*torch.log(sigma)
+    log_coeff = -torch.log(sigma)
     return -(log_coeff + exponent).sum()
-
-# def log_gaussian_loss(output, target, sigma, no_dim, sum_reduce=True):
-#     exponent = -0.5*(target - output)**2/sigma**2
-#     log_coeff = -no_dim*torch.log(sigma) - 0.5*no_dim*np.log(2*np.pi)
-    
-#     if sum_reduce:
-#         return -(log_coeff + exponent).sum()
-#     else:
-#         return -(log_coeff + exponent)
 
 
 def get_kl_divergence(weights, prior, varpost):
