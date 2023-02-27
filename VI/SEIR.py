@@ -81,11 +81,12 @@ class BBP_Model_PINN_SEIR(BBP_Model_PINN):
                                     'nE_mu':nn.Parameter(torch.Tensor(1).uniform_(0, 1)),
                                     'nI_mu':nn.Parameter(torch.Tensor(1).uniform_(0, 1)),
                                     'nR_mu':nn.Parameter(torch.Tensor(1).uniform_(0, 1)),
-                                    'beta_mu':nn.Parameter(torch.Tensor(1).uniform_(0, 1)), 
+                                    'beta_mu':nn.Parameter(torch.Tensor(1).uniform_(40, 60)), 
                                     'a_mu':nn.Parameter(torch.Tensor(1).uniform_(0, 1)), 
                                     'gamma_mu':nn.Parameter(torch.Tensor(1).uniform_(0, 1)),
                                     'd_mu':nn.Parameter(torch.Tensor(1).uniform_(0, 1))
-                                    }).to(self.device)
+                                    })
+
         self.para_rhos = nn.ParameterDict({
                                     'nS_rho':nn.Parameter(torch.Tensor(1).uniform_(-3, 2)),
                                     'nE_rho':nn.Parameter(torch.Tensor(1).uniform_(-3, 2)),
@@ -95,7 +96,7 @@ class BBP_Model_PINN_SEIR(BBP_Model_PINN):
                                     'a_rho':nn.Parameter(torch.Tensor(1).uniform_(-3, 2)), 
                                     'gamma_rho':nn.Parameter(torch.Tensor(1).uniform_(-3, 2)),
                                     'd_rho':nn.Parameter(torch.Tensor(1).uniform_(-3, 2))
-                                    }).to(self.device)
+                                    })
         
         for (key_mu, value_mu), (key_rho, value_rho)  in zip(self.para_mus.items(), self.para_rhos.items()):
             self.network.register_parameter(key_mu, value_mu)
@@ -105,7 +106,7 @@ class BBP_Model_PINN_SEIR(BBP_Model_PINN):
         self.network.register_parameter('alpha', self.alpha)
 
         self.pde_para_prior = [gaussian(0, 1), gaussian(0, 1), gaussian(0, 1), gaussian(0, 1), 
-                                gaussian(0, 1), gaussian(0, 1), gaussian(0, 1), gaussian(0, 1)]
+                                gaussian(50, 1), gaussian(0, 1), gaussian(0, 1), gaussian(0, 1)]
 
       
 
@@ -117,8 +118,9 @@ class BBP_Model_PINN_SEIR(BBP_Model_PINN):
         log_noise_u = out[:, 4:]
         return u, log_noise_u, KL_loss
 
-    def net_F(self, x, y, t, u, para_samples):
-        # u = self.net_U(x, y, t)
+    def net_F(self, x, y, t, para_samples):
+
+        u, _, _ = self.net_U(x, y, t)
         if self.normal:
             u = u*(self.u_ub-self.u_lb) + self.u_lb # reverse scaling
 
@@ -199,7 +201,7 @@ class BBP_Model_PINN_SEIR(BBP_Model_PINN):
                         KL_loss_total += get_kl_Gaussian_divergence(prior.mu, prior.sigma**2, value_mu, std**2)
                      
                     u_pred, log_noise_u, KL_loss_model_para = self.net_U(X, Y, t)
-                    f_pred = self.net_F(X, Y, t, u_pred, para_samples)
+                    f_pred = self.net_F(X, Y, t, para_samples)
                     KL_loss_total += KL_loss_model_para
                
                 fit_loss_U_total += self.loss_func(u_pred, U, log_noise_u.exp())
@@ -253,8 +255,6 @@ if __name__ == '__main__':
     args = parser.parse_args('') # if .ipynb
     # args = parser.parse_args()
 
-    
-
     n_x = args.n_x
     n_y = args.n_y
     u_0, N = state_init(n_x, n_y) 
@@ -264,7 +264,7 @@ if __name__ == '__main__':
     n_timestep = args.n_timestep
 
     para_simu = {'nS':0.1, 'nE':0.1, 'nI':0.1, 'nR':0.1,  
-                    'beta':50, 'a':0.2, 'gamma':0.1, 'd':0.}
+                    'beta':50, 'a':0.2, 'gamma':0.1, 'd':0.1}
     
     if not args.resume:
 
@@ -281,7 +281,7 @@ if __name__ == '__main__':
         u_t = np.load('../Data/simu_data_seir')
         X_simu = np.concatenate( [np.sum( u_t[i], axis=(1,2))[None,...] for i in range(n_timestep)], axis=0)
 
-    ## data_fit
+    #%%
    
     x = np.array([h*i for i in range(n_x)], dtype=float)
     y = np.array([h*i for i in range(n_y)], dtype=float)
@@ -409,11 +409,12 @@ if __name__ == '__main__':
                             pinn_model.para_mus['gamma_mu'].exp().item(), pinn_model.para_mus['d_mu'].exp().item())
                 print("Epoch: {:5d}/{:5d}, S = {:.3f}, E = {:.3f}, I = {:.3f}, R = {:.3f}, beta = {:.3f}, a = {:.3f}, gamma = {:.3f}, d = {:.3f}".format(*printing))
 
+                std_ = lambda rho: torch.log(1 + torch.exp(rho))
                 printing = (i+1, num_epochs, 
-                            pinn_model.para_mus['nS_mu'].exp().item(), pinn_model.para_mus['nE_mu'].exp().item(),
-                            pinn_model.para_mus['nI_mu'].exp().item(), pinn_model.para_mus['nR_mu'].exp().item(),
-                            pinn_model.para_mus['beta_mu'].exp().item(), pinn_model.para_mus['a_mu'].exp().item(),
-                            pinn_model.para_mus['gamma_mu'].exp().item(), pinn_model.para_mus['d_mu'].exp().item())
+                            std_(pinn_model.para_rhos['nS_rho']).item(), std_(pinn_model.para_rhos['nE_rho']).item(),
+                            std_(pinn_model.para_rhos['nI_rho']).item(), std_(pinn_model.para_rhos['nR_rho']).item(),
+                            std_(pinn_model.para_rhos['beta_rho']).item(), std_(pinn_model.para_rhos['a_rho']).item(),
+                            std_(pinn_model.para_rhos['gamma_rho']).item(), std_(pinn_model.para_rhos['d_rho']).item())
                 print("Epoch: {:5d}/{:5d}, Ss = {:.3f}, Es = {:.3f}, Is = {:.3f}, Rs = {:.3f}, betas = {:.3f}, as = {:.3f}, gammas = {:.3f}, ds = {:.3f}".format(*printing))
             
             
@@ -459,5 +460,6 @@ if __name__ == '__main__':
         axs[1,1].set_title('R')
 
     plot(data)
+
     
 # %%
