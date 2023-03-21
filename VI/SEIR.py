@@ -25,6 +25,7 @@ def state_init(n_x, n_y):
     
     S_xy_0 = np.abs(np.random.normal(150, 30, size=(n_x, n_y)).astype(int))
     N = np.sum(S_xy_0)
+    
     print(f'number of people = {N}')
 
     # Infected
@@ -36,7 +37,7 @@ def state_init(n_x, n_y):
         I_xy_0[ia, ib] +=  int(S_xy_0[ia, ib]/5)
         S_xy_0[ia, ib] -= int(S_xy_0[ia, ib]/5)
 
-    n_infected = np.sum(I_xy_0)    
+    n_infected = np.sum(I_xy_0)
     print(f'number of infected people = {n_infected}')
 
 
@@ -81,7 +82,7 @@ class BBP_Model_PINN_SEIR(BBP_Model_PINN):
                                     'nE_mu':nn.Parameter(torch.Tensor(1).uniform_(0, 1)),
                                     'nI_mu':nn.Parameter(torch.Tensor(1).uniform_(0, 1)),
                                     'nR_mu':nn.Parameter(torch.Tensor(1).uniform_(0, 1)),
-                                    'beta_mu':nn.Parameter(torch.Tensor(1).uniform_(40, 60)), 
+                                    'beta_mu':nn.Parameter(torch.Tensor(1).uniform_(0, 0.1)), 
                                     'a_mu':nn.Parameter(torch.Tensor(1).uniform_(0, 1)), 
                                     'gamma_mu':nn.Parameter(torch.Tensor(1).uniform_(0, 1)),
                                     'd_mu':nn.Parameter(torch.Tensor(1).uniform_(0, 1))
@@ -106,9 +107,9 @@ class BBP_Model_PINN_SEIR(BBP_Model_PINN):
         self.network.register_parameter('alpha', self.alpha)
 
         self.pde_para_prior = [gaussian(0, 1), gaussian(0, 1), gaussian(0, 1), gaussian(0, 1), 
-                                gaussian(50, 1), gaussian(0, 1), gaussian(0, 1), gaussian(0, 1)]
+                                gaussian(0, 1), gaussian(0, 1), gaussian(0, 1), gaussian(0, 1)]
 
-      
+    
 
     def net_U(self, x, y, t):
         xt = torch.cat((x, y, t), dim=1)
@@ -118,7 +119,7 @@ class BBP_Model_PINN_SEIR(BBP_Model_PINN):
         log_noise_u = out[:, 4:]
         return u, log_noise_u, KL_loss
 
-    def net_F(self, x, y, t, para_samples):
+    def net_F(self, x, y, t, para_samples, N):
 
         u, _, _ = self.net_U(x, y, t)
         if self.normal:
@@ -160,8 +161,8 @@ class BBP_Model_PINN_SEIR(BBP_Model_PINN):
         nS, nE, nI, nR = para_samples['nS_mu'].exp(), para_samples['nE_mu'].exp(), para_samples['nI_mu'].exp(), para_samples['nR_mu'].exp()
         beta, a, gamma, d = para_samples['beta_mu'].exp(), para_samples['a_mu'].exp(), para_samples['gamma_mu'].exp(), para_samples['d_mu'].exp()
 
-        N_S = nS*(U_xx[0] + U_yy[0]) - beta*S*I
-        N_E = nE*(U_xx[1] + U_yy[1]) + beta*S*I - a*E
+        N_S = nS*(U_xx[0] + U_yy[0]) - beta*S*I*N
+        N_E = nE*(U_xx[1] + U_yy[1]) + beta*S*I*N - a*E
         N_I = nI*(U_xx[2] + U_yy[2]) + a*E - gamma*I - d*I
         N_R = nR*(U_xx[3] + U_yy[3]) + gamma*I 
 
@@ -173,9 +174,9 @@ class BBP_Model_PINN_SEIR(BBP_Model_PINN):
 
 
 
-    def fit(self, data_loader, n_samples):
+    def fit(self, data_loader, n_samples, N):
         self.network.train()
-       
+        
         for XYT, U in data_loader:
             fit_loss_F_total = 0
             fit_loss_U_total = 0
@@ -201,7 +202,7 @@ class BBP_Model_PINN_SEIR(BBP_Model_PINN):
                         KL_loss_total += get_kl_Gaussian_divergence(prior.mu, prior.sigma**2, value_mu, std**2)
                      
                     u_pred, log_noise_u, KL_loss_model_para = self.net_U(X, Y, t)
-                    f_pred = self.net_F(X, Y, t, para_samples)
+                    f_pred = self.net_F(X, Y, t, para_samples, N)
                     KL_loss_total += KL_loss_model_para
                
                 fit_loss_U_total += self.loss_func(u_pred, U, log_noise_u.exp())
@@ -264,7 +265,7 @@ if __name__ == '__main__':
     n_timestep = args.n_timestep
 
     para_simu = {'nS':0.1, 'nE':0.1, 'nI':0.1, 'nR':0.1,  
-                    'beta':50, 'a':0.2, 'gamma':0.1, 'd':0.1}
+                    'beta':0.005, 'a':0.2, 'gamma':0.1, 'd':0.1}
     
     if not args.resume:
 
@@ -369,7 +370,7 @@ if __name__ == '__main__':
 
     for i in range(num_epochs):
 
-        EU, EF, KL_loss, total_loss = pinn_model.fit(data_loader, n_samples = n_fit)
+        EU, EF, KL_loss, total_loss = pinn_model.fit(data_loader, n_samples = n_fit, N = N)
         
         fit_loss_U_train[i] = EU.item()
         fit_loss_F_train[i] = EF.item()
@@ -463,3 +464,34 @@ if __name__ == '__main__':
 
     
 # %%
+'''
+SIAM
+SIAG on Uncertainty Quantification Community
+Post New Message
+ 
+Feb 24, 2023
+Discussions
+started 13 hours ago, Tan Bui-Thanh (0 replies)
+Call for registration: SciML workshop, April 3-4, 2023, at the Oden Institute, UT Austin   external link to thread view
+1. 	Dear Colleagues, Registration is open for the... Tan Bui-Thanh
+started 13 hours ago, Taylor Johnson (0 replies)
+Now Accepting Applications for the SIAM-Simons Undergraduate Summer Research Program   external link to thread view
+2. 	Applications for the SIAM-Simons Undergraduate... Taylor Johnson
+
+
+ 
+top	 next
+1.	Call for registration: SciML workshop, April 3-4, 2023, at the Oden Institute, UT Austin
+Reply to Group	Reply to Sender
+Tan Bui-Thanh	
+Feb 24, 2023 10:31 AM
+Tan Bui-Thanh
+Dear Colleagues,
+Registration is open for the inaugural Workshop on Scientific Machine Learning at the Oden Institute at UT Austin, in Austin TX, on April 3-4, 2023.
+Scientific Machine Learning is an emerging research area focused on the opportunities and challenges of machine learning in the context of 
+complex applications across science, engineering, and medicine. The inaugural workshop on Scientific Machine Learning will feature invited talks by experts spanning 
+computational science and engineering and data-driven machine learning to foster collaboration and establish central challenges and research directions in SciML.
+More information, including a link to registration, can be found on the workshop website.  Oden Institute is unable to provide financial support.
+Regards,
+Organizers: Rachel Ward and Tan Bui-Thanh
+'''

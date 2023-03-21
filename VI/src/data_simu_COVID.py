@@ -66,11 +66,11 @@ class model:
         # N += 1e-6
 
         S1 = S0 + dt*self.U_xx_yy(self.para['nS'], S0, h) \
-            - dt*(self.para['beta']*S0*I0) 
+            - dt*(self.para['beta']*S0*I0*self.N) 
             
 
         E1 = E0 + dt*self.U_xx_yy(self.para['nE'], E0, h) \
-            + dt*(self.para['beta']*S0*I0 - self.para['a']*E0)
+            + dt*(self.para['beta']*S0*I0*self.N - self.para['a']*E0)
                    
 
         I1 = I0 + dt*self.U_xx_yy(self.para['nI'], I0, h) \
