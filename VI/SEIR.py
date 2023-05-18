@@ -21,6 +21,7 @@ from src.model import BBP_Model_PINN
 from src.data_simu_COVID import model
 
 
+
 def state_init(n_x, n_y): 
     
     S_xy_0 = np.abs(np.random.normal(150, 30, size=(n_x, n_y)).astype(int))
@@ -78,10 +79,10 @@ class BBP_Model_PINN_SEIR(BBP_Model_PINN):
     def initial_para(self):
 
         self.para_mus = nn.ParameterDict({
-                                    'nS_mu':nn.Parameter(torch.Tensor(1).uniform_(0, 1)),
-                                    'nE_mu':nn.Parameter(torch.Tensor(1).uniform_(0, 1)),
-                                    'nI_mu':nn.Parameter(torch.Tensor(1).uniform_(0, 1)),
-                                    'nR_mu':nn.Parameter(torch.Tensor(1).uniform_(0, 1)),
+                                    # 'nS_mu':nn.Parameter(torch.Tensor(1).uniform_(0, 1)),
+                                    # 'nE_mu':nn.Parameter(torch.Tensor(1).uniform_(0, 1)),
+                                    # 'nI_mu':nn.Parameter(torch.Tensor(1).uniform_(0, 1)),
+                                    # 'nR_mu':nn.Parameter(torch.Tensor(1).uniform_(0, 1)),
                                     'beta_mu':nn.Parameter(torch.Tensor(1).uniform_(0, 0.1)), 
                                     'a_mu':nn.Parameter(torch.Tensor(1).uniform_(0, 1)), 
                                     'gamma_mu':nn.Parameter(torch.Tensor(1).uniform_(0, 1)),
@@ -89,10 +90,10 @@ class BBP_Model_PINN_SEIR(BBP_Model_PINN):
                                     })
 
         self.para_rhos = nn.ParameterDict({
-                                    'nS_rho':nn.Parameter(torch.Tensor(1).uniform_(-3, 2)),
-                                    'nE_rho':nn.Parameter(torch.Tensor(1).uniform_(-3, 2)),
-                                    'nI_rho':nn.Parameter(torch.Tensor(1).uniform_(-3, 2)),
-                                    'nR_rho':nn.Parameter(torch.Tensor(1).uniform_(-3, 2)),
+                                    # 'nS_rho':nn.Parameter(torch.Tensor(1).uniform_(-3, 2)),
+                                    # 'nE_rho':nn.Parameter(torch.Tensor(1).uniform_(-3, 2)),
+                                    # 'nI_rho':nn.Parameter(torch.Tensor(1).uniform_(-3, 2)),
+                                    # 'nR_rho':nn.Parameter(torch.Tensor(1).uniform_(-3, 2)),
                                     'beta_rho':nn.Parameter(torch.Tensor(1).uniform_(-3, 2)), 
                                     'a_rho':nn.Parameter(torch.Tensor(1).uniform_(-3, 2)), 
                                     'gamma_rho':nn.Parameter(torch.Tensor(1).uniform_(-3, 2)),
@@ -103,11 +104,10 @@ class BBP_Model_PINN_SEIR(BBP_Model_PINN):
             self.network.register_parameter(key_mu, value_mu)
             self.network.register_parameter(key_rho, value_rho)
 
-        self.alpha = nn.Parameter(torch.Tensor(1).uniform_(0, 0.5))
+        self.alpha = nn.Parameter(torch.Tensor(1).uniform_(0, 1))
         self.network.register_parameter('alpha', self.alpha)
 
-        self.pde_para_prior = [gaussian(0, 1), gaussian(0, 1), gaussian(0, 1), gaussian(0, 1), 
-                                gaussian(0, 1), gaussian(0, 1), gaussian(0, 1), gaussian(0, 1)]
+        self.pde_para_prior = [gaussian(0, 1), gaussian(0, 1), gaussian(0, 1), gaussian(0, 1)]
 
     
 
@@ -158,9 +158,10 @@ class BBP_Model_PINN_SEIR(BBP_Model_PINN):
 
         S = u[:,0:1]; E = u[:,1:2]; I = u[:,2:3]; 
 
-        nS, nE, nI, nR = para_samples['nS_mu'].exp(), para_samples['nE_mu'].exp(), para_samples['nI_mu'].exp(), para_samples['nR_mu'].exp()
+        # nS, nE, nI, nR = para_samples['nS_mu'].exp(), para_samples['nE_mu'].exp(), para_samples['nI_mu'].exp(), para_samples['nR_mu'].exp()
+        nS, nE, nI, nR = 0.1, 0.1, 0.1, 0.1
         beta, a, gamma, d = para_samples['beta_mu'].exp(), para_samples['a_mu'].exp(), para_samples['gamma_mu'].exp(), para_samples['d_mu'].exp()
-
+        # beta, a, gamma, d = 0.005, 0.2, 0.1, 0.1
         N_S = nS*(U_xx[0] + U_yy[0]) - beta*S*I*N
         N_E = nE*(U_xx[1] + U_yy[1]) + beta*S*I*N - a*E
         N_I = nI*(U_xx[2] + U_yy[2]) + a*E - gamma*I - d*I
@@ -196,7 +197,8 @@ class BBP_Model_PINN_SEIR(BBP_Model_PINN):
                     for (name, value_mu), (_, value_rho), prior  in zip(self.para_mus.items(), self.para_rhos.items(), self.pde_para_prior):
                         ep = value_mu.data.new(value_mu.size()).normal_()
                         std = torch.log(1 + torch.exp(value_rho))
-                        sample = value_mu + ep * std
+                        sample = value_mu  
+                        + ep * std
                         para_samples[name] = sample
 
                         KL_loss_total += get_kl_Gaussian_divergence(prior.mu, prior.sigma**2, value_mu, std**2)
@@ -255,7 +257,7 @@ if __name__ == '__main__':
     parser.add_argument('--save', default=True, type=bool, help='save or not')
     args = parser.parse_args('') # if .ipynb
     # args = parser.parse_args()
-
+    model_path = './model_save'
     n_x = args.n_x
     n_y = args.n_y
     u_0, N = state_init(n_x, n_y) 
@@ -337,11 +339,11 @@ if __name__ == '__main__':
     # prior = spike_slab_2GMM(mu1 = 0, mu2 = 0, sigma1 = 0.1, sigma2 = 0.0005, pi = 0.75)
     prior = gaussian(0, 1)
 
-    num_epochs = 40000
+    num_epochs = 100000
 
     n_batches = int(n_train / batch_size)
 
-    res = True
+    res = True 
     normal = True
     n_hidden = 50
     activation = nn.Tanh()
@@ -402,96 +404,79 @@ if __name__ == '__main__':
                 writer.add_scalars("loss/train_test", {'train':error_train, 'test':error_star}, i)
                 print("Epoch: {:5d}/{:5d}, error_test = {:.5f}, error_train = {:.5f}".format(i+1, num_epochs, error_star, error_train))
 
+            if i % 5000 == 0:
+                
+                file_name = f'/SEIR_{n_train}.pth'
+                pinn_model.save_model(i, model_path + file_name)
+
             if identification:
+                # printing = (i+1, num_epochs, 
+                #             pinn_model.para_mus['nS_mu'].exp().item(), pinn_model.para_mus['nE_mu'].exp().item(),
+                #             pinn_model.para_mus['nI_mu'].exp().item(), pinn_model.para_mus['nR_mu'].exp().item(),
+                #             pinn_model.para_mus['beta_mu'].exp().item(), pinn_model.para_mus['a_mu'].exp().item(),
+                #             pinn_model.para_mus['gamma_mu'].exp().item(), pinn_model.para_mus['d_mu'].exp().item())
+                # print("Epoch: {:5d}/{:5d}, S = {:.3f}, E = {:.3f}, I = {:.3f}, R = {:.3f}, beta = {:.3f}, a = {:.3f}, gamma = {:.3f}, d = {:.3f}".format(*printing))
+
+                # std_ = lambda rho: torch.log(1 + torch.exp(rho))
+                # printing = (i+1, num_epochs, 
+                #             std_(pinn_model.para_rhos['nS_rho']).item(), std_(pinn_model.para_rhos['nE_rho']).item(),
+                #             std_(pinn_model.para_rhos['nI_rho']).item(), std_(pinn_model.para_rhos['nR_rho']).item(),
+                #             std_(pinn_model.para_rhos['beta_rho']).item(), std_(pinn_model.para_rhos['a_rho']).item(),
+                #             std_(pinn_model.para_rhos['gamma_rho']).item(), std_(pinn_model.para_rhos['d_rho']).item())
+                # print("Epoch: {:5d}/{:5d}, Ss = {:.3f}, Es = {:.3f}, Is = {:.3f}, Rs = {:.3f}, betas = {:.3f}, as = {:.3f}, gammas = {:.3f}, ds = {:.3f}".format(*printing))
+
                 printing = (i+1, num_epochs, 
-                            pinn_model.para_mus['nS_mu'].exp().item(), pinn_model.para_mus['nE_mu'].exp().item(),
-                            pinn_model.para_mus['nI_mu'].exp().item(), pinn_model.para_mus['nR_mu'].exp().item(),
                             pinn_model.para_mus['beta_mu'].exp().item(), pinn_model.para_mus['a_mu'].exp().item(),
                             pinn_model.para_mus['gamma_mu'].exp().item(), pinn_model.para_mus['d_mu'].exp().item())
-                print("Epoch: {:5d}/{:5d}, S = {:.3f}, E = {:.3f}, I = {:.3f}, R = {:.3f}, beta = {:.3f}, a = {:.3f}, gamma = {:.3f}, d = {:.3f}".format(*printing))
+                print("Epoch: {:5d}/{:5d}, beta = {:.3f}, a = {:.3f}, gamma = {:.3f}, d = {:.3f}".format(*printing))
 
                 std_ = lambda rho: torch.log(1 + torch.exp(rho))
                 printing = (i+1, num_epochs, 
-                            std_(pinn_model.para_rhos['nS_rho']).item(), std_(pinn_model.para_rhos['nE_rho']).item(),
-                            std_(pinn_model.para_rhos['nI_rho']).item(), std_(pinn_model.para_rhos['nR_rho']).item(),
                             std_(pinn_model.para_rhos['beta_rho']).item(), std_(pinn_model.para_rhos['a_rho']).item(),
                             std_(pinn_model.para_rhos['gamma_rho']).item(), std_(pinn_model.para_rhos['d_rho']).item())
-                print("Epoch: {:5d}/{:5d}, Ss = {:.3f}, Es = {:.3f}, Is = {:.3f}, Rs = {:.3f}, betas = {:.3f}, as = {:.3f}, gammas = {:.3f}, ds = {:.3f}".format(*printing))
+                print("Epoch: {:5d}/{:5d}, betas = {:.3f}, as = {:.3f}, gammas = {:.3f}, ds = {:.3f}".format(*printing))
             
             
             print()
 
     writer.close()
     
-    # %% save model
-    model_path = './model_save'
-    file_name = f'/SEIR_{n_train}.pth'
-    pinn_model.save_model(i, model_path + file_name)
+    
 
 # %%
-    def plot(data):
-        pred, _ = pinn_model.predict(data, 50, pinn_model.network)
-        pred = pred.mean(axis = 2)
+def plot(data):
+    pred, _ = pinn_model.predict(data, 50, pinn_model.network)
+    pred = pred.mean(axis = 2)
+    
+    temp = int(n_x*n_y)
+    XT_pred = np.zeros((n_timestep, temp, 4)) 
+
+    for i in range(n_timestep): 
+        XT_pred[i] = pred[temp*i:temp*(i+1),:]
         
-        temp = int(n_x*n_y)
-        XT_pred = np.zeros((n_timestep, temp, 4)) 
 
-        for i in range(n_timestep): 
-            XT_pred[i] = pred[temp*i:temp*(i+1),:]
-            
+    X_simu_pred = np.sum(XT_pred, axis=1) 
 
-        X_simu_pred = np.sum(XT_pred, axis=1) 
+    fig, axs = plt.subplots(2, 2, figsize=(20, 8))
+    axs[0,0].plot(X_simu[:,0], 'b-', linewidth = 2)
+    axs[0,0].plot(X_simu_pred[:,0], 'k--', linewidth = 2)
+    axs[0,0].legend(['Exact', 'Predict'])
+    axs[0,0].set_title('S')
 
-        fig, axs = plt.subplots(2, 2, figsize=(20, 8))
-        axs[0,0].plot(X_simu[:,0], 'b-', linewidth = 2)
-        axs[0,0].plot(X_simu_pred[:,0], 'k--', linewidth = 2)
-        axs[0,0].legend(['Exact', 'Predict'])
-        axs[0,0].set_title('S')
+    axs[0,1].plot(X_simu[:,1], 'b-', linewidth = 2)
+    axs[0,1].plot(X_simu_pred[:,1], 'k--', linewidth = 2)
+    axs[0,1].set_title('E')
 
-        axs[0,1].plot(X_simu[:,1], 'b-', linewidth = 2)
-        axs[0,1].plot(X_simu_pred[:,1], 'k--', linewidth = 2)
-        axs[0,1].set_title('E')
+    axs[1,0].plot(X_simu[:,2], 'b-', linewidth = 2)
+    axs[1,0].plot(X_simu_pred[:,2], 'k--', linewidth = 2)
+    axs[1,0].set_title('I')
 
-        axs[1,0].plot(X_simu[:,2], 'b-', linewidth = 2)
-        axs[1,0].plot(X_simu_pred[:,2], 'k--', linewidth = 2)
-        axs[1,0].set_title('I')
-
-        axs[1,1].plot(X_simu[:,3], 'b-', linewidth = 2)
-        axs[1,1].plot(X_simu_pred[:,3], 'k--', linewidth = 2)
-        axs[1,1].set_title('R')
+    axs[1,1].plot(X_simu[:,3], 'b-', linewidth = 2)
+    axs[1,1].plot(X_simu_pred[:,3], 'k--', linewidth = 2)
+    axs[1,1].set_title('R') 
 
     plot(data)
 
-    
+     
+
 # %%
-'''
-SIAM
-SIAG on Uncertainty Quantification Community
-Post New Message
- 
-Feb 24, 2023
-Discussions
-started 13 hours ago, Tan Bui-Thanh (0 replies)
-Call for registration: SciML workshop, April 3-4, 2023, at the Oden Institute, UT Austin   external link to thread view
-1. 	Dear Colleagues, Registration is open for the... Tan Bui-Thanh
-started 13 hours ago, Taylor Johnson (0 replies)
-Now Accepting Applications for the SIAM-Simons Undergraduate Summer Research Program   external link to thread view
-2. 	Applications for the SIAM-Simons Undergraduate... Taylor Johnson
-
-
- 
-top	 next
-1.	Call for registration: SciML workshop, April 3-4, 2023, at the Oden Institute, UT Austin
-Reply to Group	Reply to Sender
-Tan Bui-Thanh	
-Feb 24, 2023 10:31 AM
-Tan Bui-Thanh
-Dear Colleagues,
-Registration is open for the inaugural Workshop on Scientific Machine Learning at the Oden Institute at UT Austin, in Austin TX, on April 3-4, 2023.
-Scientific Machine Learning is an emerging research area focused on the opportunities and challenges of machine learning in the context of 
-complex applications across science, engineering, and medicine. The inaugural workshop on Scientific Machine Learning will feature invited talks by experts spanning 
-computational science and engineering and data-driven machine learning to foster collaboration and establish central challenges and research directions in SciML.
-More information, including a link to registration, can be found on the workshop website.  Oden Institute is unable to provide financial support.
-Regards,
-Organizers: Rachel Ward and Tan Bui-Thanh
-'''
